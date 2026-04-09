@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(flutter pub:*)",
+      "Bash(flutter test:*)",
+      "Bash(flutter --version)",
+      "Bash(dart:*)",
+      "Bash(flutter analyze:*)"
+    ]
+  }
+}

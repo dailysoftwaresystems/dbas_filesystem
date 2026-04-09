@@ -1,0 +1,42 @@
+name: dbas_filesystem
+description: "Flutter plugin for cross-platform file system operations with stream and byte[] support."
+version: 0.0.1
+homepage:
+
+environment:
+  sdk: ^3.11.4
+  flutter: '>=3.41.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  web: ^1.0.0
+  plugin_platform_interface: ^2.0.2
+  path: ^1.9.1
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
+      web:
+        pluginClass: DbasFileSystemNativeWeb
+        fileName: src/native/dbas_filesystem_native_web.dart
+  assets:
+    - web/libs/dbas_filesystem_worker.js
