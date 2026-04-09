@@ -5,7 +5,9 @@
       "Bash(flutter test:*)",
       "Bash(flutter --version)",
       "Bash(dart:*)",
-      "Bash(flutter analyze:*)"
+      "Bash(flutter analyze:*)",
+      "Bash(flutter run:*)",
+      "Bash(flutter clean:*)"
     ]
   }
 }
