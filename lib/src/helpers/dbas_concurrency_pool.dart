@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 
 class ConcurrencyPool {
@@ -31,24 +32,40 @@ class ConcurrencyPool {
     }
   }
 
-  /// Runs all [tasks] with bounded concurrency.
+  /// Runs all [tasks] with bounded concurrency, collecting **all** errors.
   ///
+  /// Every task runs to completion regardless of whether others fail.
   /// If a [cancellationToken] is provided, tasks that have not yet started
   /// will throw [OperationCancelledException] once the token is cancelled.
   /// Tasks already in flight will run to completion.
   ///
-  /// Note: this uses [Future.wait] internally. If any task fails, the
-  /// returned future completes with that error. Other in-flight tasks
-  /// continue to completion but their results are discarded.
+  /// If any tasks fail, throws [MultiException] containing all errors.
   static Future<List<T>> runAll<T>(
     Iterable<Future<T> Function()> tasks, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
-  }) {
+  }) async {
     final pool = ConcurrencyPool(maxConcurrency);
-    return Future.wait(tasks.map((t) => pool.run(() {
-      cancellationToken?.throwIfCancelled();
-      return t();
-    })));
+    final taskList = tasks.toList();
+    final results = List<T?>.filled(taskList.length, null);
+    final errors = <(String, Object)>[];
+
+    // Launch all tasks — the pool limits concurrency internally.
+    // Wrap each in a try-catch so Future.wait never sees errors.
+    await Future.wait(
+      List.generate(taskList.length, (i) async {
+        try {
+          results[i] = await pool.run(() {
+            cancellationToken?.throwIfCancelled();
+            return taskList[i]();
+          });
+        } catch (e) {
+          errors.add(('task[$i]', e));
+        }
+      }),
+    );
+
+    if (errors.isNotEmpty) throw MultiException(errors);
+    return results.cast<T>();
   }
 }

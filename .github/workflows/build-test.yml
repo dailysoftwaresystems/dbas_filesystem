@@ -1,4 +1,4 @@
-name: Test Flutter Plugin
+name: Build and Test Flutter Plugin
 on:
   push:
     branches: [ "main" ]
@@ -46,6 +46,21 @@ jobs:
     - name: Stop ChromeDriver
       if: always()
       run: kill $CHROMEDRIVER_PID || true
+    - name: Build JS Worker
+      if: github.event_name == 'push'
+      run: bash scripts/minify-js-worker.sh
+    - name: Commit minified worker
+      if: github.event_name == 'push'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        if git diff --quiet web/libs/dbas_filesystem_worker.js; then
+          echo "No worker changes to commit."
+        else
+          git add web/libs/dbas_filesystem_worker.js
+          git commit -m "Worker minify v${{ env.VERSION }}"
+          git push
+        fi
     - name: Create Release
       if: github.event_name == 'push'
       env:

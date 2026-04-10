@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
+import 'package:dbas_filesystem/src/dbas_filesystem_progress.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 import 'dbas_filesystem_native_interface.dart';
@@ -41,6 +42,13 @@ class _WorkerHandle {
     return completer.future;
   }
 
+  /// Converts `Uint8List` values to plain `List<int>` for reliable JS interop.
+  ///
+  /// **Known overhead**: this creates an extra copy of byte data. Dart's
+  /// `jsify()` doesn't reliably transfer `Uint8List` as `Uint8Array` across
+  /// all runtimes, and `postMessage` with `Transferable` is not supported
+  /// by the current `dart:js_interop` API. The JS worker also converts
+  /// `Uint8Array` results back to `Array` for the same reason.
   static Map<String, dynamic> _sanitizeArgs(Map<String, dynamic> args) {
     final result = <String, dynamic>{};
     for (final entry in args.entries) {
@@ -290,12 +298,12 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   // ── Single file operations ────────────────────────────────────────────
 
   @override
-  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) async {
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = false}) async {
     await _send('writeFile', {'path': path, 'bytes': bytes, 'overwrite': overwrite});
   }
 
   @override
-  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) async {
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = false}) async {
     final worker = _pickWorker(); // pin for entire stream
     final streamId = _nextStreamId++;
     await worker.send('beginStreamWrite', {'path': path, 'streamId': streamId, 'overwrite': overwrite});
@@ -399,17 +407,32 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     await _send('copyFile', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
+    // Web copy is a single worker message — report completion.
+    onProgress?.call(OperationProgress(
+      current: CurrentEntryProgress(
+        entry: FileSystemEntry(path: destPath, type: FileSystemEntityType.file),
+        progress: 1.0,
+      ),
+      overall: 1.0,
+    ));
   }
 
   @override
-  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     await _send('moveFile', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
+    onProgress?.call(OperationProgress(
+      current: CurrentEntryProgress(
+        entry: FileSystemEntry(path: destPath, type: FileSystemEntityType.file),
+        progress: 1.0,
+      ),
+      overall: 1.0,
+    ));
   }
 
   @override
-  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) async {
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = false}) async {
     await _send('renameFile', {'oldPath': oldPath, 'newPath': newPath, 'overwrite': overwrite});
   }
 
@@ -470,7 +493,26 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     await _send('copyDirectory', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
+    onProgress?.call(OperationProgress(
+      current: CurrentEntryProgress(
+        entry: FileSystemEntry(path: destPath, type: FileSystemEntityType.directory),
+        progress: 1.0,
+      ),
+      overall: 1.0,
+    ));
+  }
+
+  @override
+  Future<void> moveDirectory(String sourcePath, String destPath, {ProgressCallback? onProgress}) async {
+    await _send('moveDirectory', {'sourcePath': sourcePath, 'destPath': destPath});
+    onProgress?.call(OperationProgress(
+      current: CurrentEntryProgress(
+        entry: FileSystemEntry(path: destPath, type: FileSystemEntityType.directory),
+        progress: 1.0,
+      ),
+      overall: 1.0,
+    ));
   }
 }

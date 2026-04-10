@@ -1,3 +1,62 @@
+## 3.1.0
+
+### Breaking changes
+
+* **`overwrite` defaults to `false`**: `writeFile`, `writeFileStream`, `copyFile`, `moveFile`, `renameFile`, and `copyDirectory` now default to `overwrite: false`. Existing files are preserved unless you explicitly pass `overwrite: true`. This prevents silent data loss from accidental overwrites.
+* **Atomic bulk writes (default)**: `writeFiles` and `writeFilesStream` are now atomic by default — if any write fails, all successfully written files are rolled back to their original state. Set `atomic: false` to restore the previous non-atomic behavior with `onError` support.
+* **`readFiles` without `onError` throws `MultiException`**: When `onError` is not provided, `readFiles` now collects all errors and throws `MultiException` instead of propagating only the first error. Pass `onError` to get the previous partial-results behavior.
+
+### New features
+
+* **Atomic bulk operations with rollback**: `writeFiles` and `writeFilesStream` accept `{bool atomic = true}`. In atomic mode, existing files are snapshotted before writing. On failure, all changes are rolled back and `AtomicOperationException` is thrown (with an optional `secondaryError` if rollback itself partially failed).
+* **`moveDirectory`**: Moves a directory tree. On native, attempts atomic `rename()` first, falling back to copy+delete across filesystems. On web, performs copy+delete via OPFS.
+* **File change notifications**: `getInstance` accepts `onFileChanged` callback (also settable as a property). Fires after every successful mutation with a `Map<String, FileChange>` describing old/new state of each affected entry. Directory operations fire one notification with all affected entries.
+* **Progress callbacks**: All operations accept `onProgress` with `OperationProgress` containing `current` (entry + progress) and `overall` (0.0-1.0). Bulk ops report per-file completion; copy operations report byte-level progress on native.
+* **Configurable dispose timeout**: `dispose({Duration timeout})` replaces the hard-coded 30-second timeout.
+* **Hierarchical per-path locking**: File operations acquire a shared lock on the parent directory and an exclusive lock on the file. Directory-destructive operations (delete, rename, move) acquire exclusive locks that block concurrent file operations in that directory. Non-destructive directory operations (list, exists, create) use shared locks.
+* **Symlink resolution in `listDirectory`**: Symlinks on native platforms are now resolved to their target type instead of being misidentified as directories.
+* **`MultiException`**: Collects all errors from parallel operations with path context. Immutable error list.
+* **`AtomicOperationException`**: Contains the primary `error` and an optional `secondaryError` from rollback.
+* **`FileChange` type**: Describes a single change with `oldEntry`/`newEntry` and derived `type` (created/modified/deleted). Named factories: `FileChange.created()`, `.deleted()`, `.modified()`.
+* **`OperationProgress` / `CurrentEntryProgress`**: Progress reporting types with range-validated fields.
+* **Web worker orphaned stream cleanup**: On worker restart, orphaned writable streams from a previous crash are aborted during initialization.
+* **Web `moveDirectory` destination guard**: Web now checks that the destination doesn't already exist before moving, matching native `Directory.rename()` behavior.
+
+### Fixes
+
+* **Callback safety**: `onFileChanged` and `onProgress` callbacks are wrapped in try-catch — a bug in user code never masks a successful filesystem operation.
+* **`PathLock.dispose` no longer orphans waiters**: On timeout, pending lock waiters receive `StateError` instead of hanging forever.
+* **Cancellation token respected in snapshot phase**: `writeFiles`/`writeFilesStream` now check the cancellation token during the snapshot phase, not just the write phase.
+* **`_RWLock` defensive assertions**: `releaseShared`/`releaseExclusive` assert correct pairing to prevent silent lock corruption.
+
+### Improvements
+
+* **Singleton documented as intentional**: Class-level documentation explains why the singleton pattern is used (coordinating per-path locks, worker pools, and change notifications).
+* **Web worker double-copy overhead documented**: The `Uint8List` → `List<int>` conversion in `_sanitizeArgs` is documented as a known Dart JS interop limitation.
+* **`readFileStream` lock behavior documented**: Doc comment explains that the file path lock is held for the entire stream lifetime.
+* **JS worker cleanup logging**: Silent `catch (_) {}` blocks in worker cleanup (orphaned streams, move/rename rollback) now use `console.warn` for debuggability.
+* **`_rollback` return clarity**: Uses `return _rollback(...)` for explicit non-return semantics.
+* **JS worker minification**: Source moved to `web/libs/src/`. CI automatically minifies via esbuild and commits the built output to `web/libs/`. Local scripts available at `scripts/minify-js-worker.sh` and `.ps1`.
+
+### Tests
+
+* 129 tests (up from 92). New coverage:
+  * Atomic rollback (success + failure paths)
+  * `writeFilesStream` (happy path + atomic rollback)
+  * `moveDirectory` (happy path + missing source)
+  * File change notifications (writeFile create/modify, deleteFile, moveFile, renameFile, copyDirectory, moveDirectory, writeFiles)
+  * Progress callbacks (writeFile, writeFiles)
+  * Callback safety (throwing onFileChanged, throwing onProgress)
+  * `PathLock.withLocks` (sorted acquisition, exclusive-overrides-shared)
+  * PathLock writer-priority
+  * Mid-flight cancellation
+  * `onError` with `atomic: false` (non-atomic write + read)
+  * `MultiException` immutability and error details
+  * `FileChange` factories and equality
+  * Configurable dispose timeout
+  * `createDirectory(recursive: false)` error path
+  * Empty bulk operation edge cases
+
 ## 3.0.0
 
 ### Breaking changes

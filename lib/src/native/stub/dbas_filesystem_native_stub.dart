@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
+import 'package:dbas_filesystem/src/dbas_filesystem_progress.dart';
 import 'package:dbas_filesystem/src/native/dbas_filesystem_native_interface.dart';
 
 /// Shared stub base for platforms where the real implementation is not
@@ -19,9 +20,9 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<void> dispose() => _unsupported();
   @override
-  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) => _unsupported();
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = false}) => _unsupported();
   @override
-  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) => _unsupported();
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = false}) => _unsupported();
   @override
   Future<void> appendFile(String path, Uint8List bytes) => _unsupported();
   @override
@@ -35,11 +36,11 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<bool> fileExists(String path) => _unsupported();
   @override
-  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) => _unsupported();
   @override
-  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) => _unsupported();
   @override
-  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) => _unsupported();
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = false}) => _unsupported();
   @override
   Future<int> getFileSize(String path) => _unsupported();
   @override
@@ -55,5 +56,7 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<void> renameDirectory(String oldPath, String newPath) => _unsupported();
   @override
-  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) => _unsupported();
+  @override
+  Future<void> moveDirectory(String sourcePath, String destPath, {ProgressCallback? onProgress}) => _unsupported();
 }

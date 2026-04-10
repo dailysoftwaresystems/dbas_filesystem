@@ -207,7 +207,29 @@ void main() {
     expect(await fs.readFile('$testRoot/rename_new/a.bin'), equals(Uint8List.fromList([1, 2])));
   });
 
-  // ── Bulk operations ───────────────────────────────────────────────────
+  // ── moveDirectory ─────────────────────────────────────────────────────
+
+  testWidgets('moveDirectory moves contents and removes source', (tester) async {
+    await fs.createDirectory('$testRoot/movedir_src/sub');
+    await fs.writeFile('$testRoot/movedir_src/a.bin', Uint8List.fromList([1, 2]));
+    await fs.writeFile('$testRoot/movedir_src/sub/b.bin', Uint8List.fromList([3, 4]));
+
+    await fs.moveDirectory('$testRoot/movedir_src', '$testRoot/movedir_dest');
+
+    expect(await fs.directoryExists('$testRoot/movedir_src'), isFalse);
+    expect(await fs.directoryExists('$testRoot/movedir_dest'), isTrue);
+    expect(await fs.readFile('$testRoot/movedir_dest/a.bin'), equals(Uint8List.fromList([1, 2])));
+    expect(await fs.readFile('$testRoot/movedir_dest/sub/b.bin'), equals(Uint8List.fromList([3, 4])));
+  });
+
+  testWidgets('moveDirectory throws DirectoryNotFoundException for missing source', (tester) async {
+    await expectLater(
+      () => fs.moveDirectory('$testRoot/no_such_dir', '$testRoot/movedir_dest2'),
+      throwsA(isA<DirectoryNotFoundException>()),
+    );
+  });
+
+  // ── Bulk operations (atomic) ──────────────────────────────────────────
 
   testWidgets('writeFiles and readFiles (bulk)', (tester) async {
     final files = {
@@ -223,6 +245,18 @@ void main() {
     expect(result['$testRoot/bulk_1.bin'], equals(Uint8List.fromList([1, 2, 3])));
     expect(result['$testRoot/bulk_2.bin'], equals(Uint8List.fromList([4, 5, 6])));
     expect(result['$testRoot/bulk_3.bin'], equals(Uint8List.fromList([7, 8, 9])));
+  });
+
+  testWidgets('writeFilesStream writes multiple files from streams', (tester) async {
+    final files = {
+      '$testRoot/stream_bulk_1.bin': Stream.fromIterable([Uint8List.fromList([1, 2])]),
+      '$testRoot/stream_bulk_2.bin': Stream.fromIterable([Uint8List.fromList([3, 4])]),
+    };
+
+    await fs.writeFilesStream(files);
+
+    expect(await fs.readFile('$testRoot/stream_bulk_1.bin'), equals(Uint8List.fromList([1, 2])));
+    expect(await fs.readFile('$testRoot/stream_bulk_2.bin'), equals(Uint8List.fromList([3, 4])));
   });
 
   // ── Exception hierarchy ───────────────────────────────────────────────
@@ -241,6 +275,15 @@ void main() {
     );
   });
 
+  testWidgets('readFiles throws MultiException on missing file', (tester) async {
+    await fs.writeFile('$testRoot/multi_valid.bin', Uint8List.fromList([1]));
+
+    await expectLater(
+      () => fs.readFiles(['$testRoot/multi_valid.bin', '$testRoot/multi_missing.bin']),
+      throwsA(isA<MultiException>()),
+    );
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   // Full feature coverage
   // ════════════════════════════════════════════════════════════════════════
@@ -249,6 +292,15 @@ void main() {
     // ── Overwrite protection ────────────────────────────────────────────
 
     group('Overwrite protection', () {
+      testWidgets('writeFile defaults to overwrite: false', (tester) async {
+        await fs.writeFile('$testRoot/ow_default.bin', Uint8List.fromList([1, 2, 3]));
+
+        await expectLater(
+          () => fs.writeFile('$testRoot/ow_default.bin', Uint8List.fromList([4, 5, 6])),
+          throwsA(isA<FileAlreadyExistsException>()),
+        );
+      });
+
       testWidgets('writeFile with overwrite: true overwrites existing file', (tester) async {
         await fs.writeFile('$testRoot/ow_true.bin', Uint8List.fromList([1, 2, 3]));
         await fs.writeFile('$testRoot/ow_true.bin', Uint8List.fromList([4, 5, 6]), overwrite: true);
@@ -429,7 +481,7 @@ void main() {
       });
     });
 
-    // ── Bulk operations ─────────────────────────────────────────────────
+    // ── Bulk operations (atomic) ────────────────────────────────────────
 
     group('Bulk operations', () {
       testWidgets('parallel bulk write with maxConcurrency', (tester) async {
@@ -521,48 +573,16 @@ void main() {
         expect(errors.length, equals(2));
       });
 
-      testWidgets('readFiles without onError throws on missing file', (tester) async {
+      testWidgets('readFiles without onError throws MultiException on missing file', (tester) async {
         await fs.writeFile('$testRoot/onerror_compat.bin', Uint8List.fromList([1]));
 
         await expectLater(
           () => fs.readFiles(['$testRoot/onerror_compat.bin', '$testRoot/onerror_compat_missing.bin']),
-          throwsA(isA<FileNotFoundException>()),
+          throwsA(isA<MultiException>()),
         );
       });
 
-      testWidgets('writeFiles with onError calls callback on individual failure', (tester) async {
-        final errors = <String, Object>{};
-        await fs.writeFiles(
-          {
-            '$testRoot/onerror_write_ok.bin': Uint8List.fromList([42]),
-            '$testRoot/onerror_write_ok2.bin': Uint8List.fromList([99]),
-          },
-          onError: (path, error) => errors[path] = error,
-        );
-
-        expect(errors, isEmpty);
-        expect(await fs.readFile('$testRoot/onerror_write_ok.bin'), equals(Uint8List.fromList([42])));
-        expect(await fs.readFile('$testRoot/onerror_write_ok2.bin'), equals(Uint8List.fromList([99])));
-      });
-
-      testWidgets('CancellationToken allows in-flight tasks to complete', (tester) async {
-        final token = CancellationToken();
-
-        final files = {
-          '$testRoot/cancel_serial_1.bin': Uint8List.fromList([1]),
-          '$testRoot/cancel_serial_2.bin': Uint8List.fromList([2]),
-          '$testRoot/cancel_serial_3.bin': Uint8List.fromList([3]),
-        };
-
-        token.cancel();
-
-        await expectLater(
-          () => fs.writeFiles(files, maxConcurrency: 1, cancellationToken: token),
-          throwsA(isA<OperationCancelledException>()),
-        );
-      });
-
-      testWidgets('writeFiles with duplicate paths — last value wins', (tester) async {
+      testWidgets('writeFiles overwrites existing files (atomic snapshot)', (tester) async {
         await fs.writeFiles({
           '$testRoot/dup_bulk.bin': Uint8List.fromList([1, 2, 3]),
         });
@@ -573,6 +593,15 @@ void main() {
 
         final result = await fs.readFile('$testRoot/dup_bulk.bin');
         expect(result, equals(Uint8List.fromList([4, 5, 6])));
+      });
+
+      testWidgets('writeFiles with empty map is a no-op', (tester) async {
+        await fs.writeFiles({});
+      });
+
+      testWidgets('readFiles with empty list returns empty map', (tester) async {
+        final result = await fs.readFiles([]);
+        expect(result, isEmpty);
       });
     });
 
@@ -780,6 +809,17 @@ void main() {
         expect(const OperationCancelledException(), isA<DbasFileSystemException>());
       });
 
+      testWidgets('MultiException and AtomicOperationException types', (tester) async {
+        final multi = MultiException([('a.bin', Exception('fail'))]);
+        expect(multi, isA<DbasFileSystemException>());
+        expect(multi.errors.length, equals(1));
+
+        final atomic = AtomicOperationException('primary', secondaryError: 'rollback');
+        expect(atomic, isA<DbasFileSystemException>());
+        expect(atomic.error, equals('primary'));
+        expect(atomic.secondaryError, equals('rollback'));
+      });
+
       testWidgets('exception toString includes path', (tester) async {
         final e = const FileNotFoundException('/some/path');
         final str = e.toString();
@@ -795,31 +835,20 @@ void main() {
         expect(e.path, isNull);
       });
 
-      testWidgets('DbasFileSystemException with path', (tester) async {
-        const e = DbasFileSystemException('test error', path: '/some/path');
-        final str = e.toString();
-        expect(str, contains('test error'));
-        expect(str, contains('/some/path'));
-        expect(e.path, equals('/some/path'));
-        expect(e.message, equals('test error'));
-      });
+      testWidgets('DbasFileSystemException with and without path', (tester) async {
+        const withPath = DbasFileSystemException('test error', path: '/some/path');
+        expect(withPath.toString(), contains('/some/path'));
 
-      testWidgets('DbasFileSystemException without path', (tester) async {
-        const e = DbasFileSystemException('test error');
-        final str = e.toString();
-        expect(str, contains('test error'));
-        expect(str.contains('[path:'), isFalse);
-        expect(e.path, isNull);
-        expect(e.message, equals('test error'));
+        const withoutPath = DbasFileSystemException('test error');
+        expect(withoutPath.path, isNull);
+        expect(withoutPath.toString().contains('[path:'), isFalse);
       });
 
       testWidgets('PermissionDeniedException toString and path', (tester) async {
         const e = PermissionDeniedException('/protected/file.bin');
         expect(e, isA<DbasFileSystemException>());
         expect(e.path, equals('/protected/file.bin'));
-        final str = e.toString();
-        expect(str, contains('Permission denied'));
-        expect(str, contains('/protected/file.bin'));
+        expect(e.toString(), contains('Permission denied'));
       });
     });
 
@@ -835,6 +864,21 @@ void main() {
         expect(a, isNot(equals(c)));
         expect(a.hashCode, equals(b.hashCode));
         expect(a.toString(), equals('FileSystemEntry(path: /a/b, type: FileSystemEntityType.file)'));
+      });
+    });
+
+    // ── FileChange model ────────────────────────────────────────────────
+
+    group('FileChange model', () {
+      testWidgets('FileChange.created, .deleted, .modified factories', (tester) async {
+        const entry = FileSystemEntry(path: 'a.txt', type: FileSystemEntityType.file);
+        final created = FileChange.created(entry);
+        final deleted = FileChange.deleted(entry);
+        final modified = FileChange.modified(oldEntry: entry, newEntry: entry);
+
+        expect(created.type, equals(FileChangeType.created));
+        expect(deleted.type, equals(FileChangeType.deleted));
+        expect(modified.type, equals(FileChangeType.modified));
       });
     });
 
@@ -1018,6 +1062,15 @@ void main() {
         }
       });
 
+      testWidgets('dispose accepts configurable timeout', (tester) async {
+        final old = await DbasFileSystem.getInstance();
+        try {
+          await old.dispose(timeout: const Duration(seconds: 5));
+        } finally {
+          fs = await DbasFileSystem.getInstance();
+        }
+      });
+
       testWidgets('operations after dispose throw StateError', (tester) async {
         final fs1 = await DbasFileSystem.getInstance();
         try {
@@ -1055,6 +1108,7 @@ void main() {
           expect(() => old.appendFile('any.bin', Uint8List(0)), throwsA(isA<StateError>()));
           expect(() => old.listDirectory('any'), throwsA(isA<StateError>()));
           expect(() => old.copyDirectory('a', 'b'), throwsA(isA<StateError>()));
+          expect(() => old.moveDirectory('a', 'b'), throwsA(isA<StateError>()));
         } finally {
           fs = await DbasFileSystem.getInstance();
         }

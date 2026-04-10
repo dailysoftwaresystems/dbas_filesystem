@@ -6,20 +6,22 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 
 - **File operations** &mdash; read, write, append, copy, move, rename, delete, and existence check.
 - **File metadata** &mdash; get file size and last modified timestamp.
-- **Overwrite protection** &mdash; `writeFile`, `writeFileStream`, `copyFile`, `moveFile`, and `renameFile` accept an `overwrite` parameter to prevent accidental overwrites.
+- **Overwrite protection** &mdash; `writeFile`, `writeFileStream`, `copyFile`, `moveFile`, `renameFile`, and `copyDirectory` default to `overwrite: false`, preventing accidental data loss.
 - **Append support** &mdash; `appendFile` and `appendFileStream` append bytes to existing files (or create them if missing).
 - **Stream support** &mdash; stream-based read and write for memory-efficient large file handling.
-- **Parallel bulk operations** &mdash; read or write multiple files concurrently with configurable `maxConcurrency`.
-- **Directory operations** &mdash; create, list (with typed entries), copy, delete, rename, and existence check.
-- **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices. Partial destination is cleaned up on failure.
-- **Thread safety** &mdash; per-path locking for both files and directories. Concurrent operations on the same path are serialized; different paths proceed in parallel.
-- **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`.
+- **Atomic bulk operations** &mdash; `writeFiles` and `writeFilesStream` default to atomic mode: snapshot existing files, write all, rollback on failure. Set `atomic: false` for independent writes with per-file `onError`.
+- **Directory operations** &mdash; create, list (with typed entries), copy, move, delete, rename, and existence check.
+- **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices.
+- **File change notifications** &mdash; optional `onFileChanged` callback fires after every mutation with a map of affected entries and their before/after state.
+- **Progress callbacks** &mdash; optional `onProgress` on all operations, with per-entry and overall progress reporting.
+- **Hierarchical thread safety** &mdash; file operations acquire a shared lock on the parent directory + exclusive lock on the file. Directory-destructive operations acquire exclusive locks that block concurrent child file ops. Different paths proceed in parallel.
+- **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`, `MultiException`, `AtomicOperationException`.
 - **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web, with automatic restart on crash (exponential backoff).
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
-- **Side-effect free path resolution** &mdash; `getAppFilePath` resolves a platform path without creating directories or accessing the file system. This asymmetry is intentional: path resolution is a pure computation, while directory creation is a side effect reserved for operations that actually write data.
-- **Lifecycle management** &mdash; `dispose()` gives in-flight operations up to 30 seconds to finish, then forces teardown. `isDisposed` reflects whether an instance has been disposed.
-- **Cancellation listeners** &mdash; `CancellationToken` supports `addListener` / `removeListener` for reactive cancellation in long-running operations.
+- **Side-effect free path resolution** &mdash; `getAppFilePath` resolves a platform path without creating directories or accessing the file system.
+- **Lifecycle management** &mdash; `dispose({timeout})` gives in-flight operations a configurable grace period, then forces teardown. `isDisposed` reflects whether an instance has been disposed.
+- **Cancellation** &mdash; `CancellationToken` with `addListener` / `removeListener` for reactive cancellation in long-running operations.
 
 ## Platform Support
 
@@ -65,12 +67,11 @@ final fs = await DbasFileSystem.getInstance();
 ```dart
 final path = await fs.getAppFilePath('example.txt');
 
-// Write
+// Write (throws FileAlreadyExistsException if file exists)
 await fs.writeFile(path, Uint8List.fromList(utf8.encode('Hello, world!')));
 
-// Write with overwrite protection
-await fs.writeFile(path, Uint8List.fromList(utf8.encode('data')), overwrite: false);
-// throws FileAlreadyExistsException if file exists
+// Write with explicit overwrite
+await fs.writeFile(path, Uint8List.fromList(utf8.encode('updated')), overwrite: true);
 
 // Read (returns Uint8List)
 final bytes = await fs.readFile(path);
@@ -101,14 +102,13 @@ final modified = await fs.getLastModified(path); // DateTime (UTC)
 ### Stream a large file
 
 ```dart
-// Write from stream (with overwrite protection)
+// Write from stream
 Stream<List<int>> chunks() async* {
   for (int i = 0; i < 100; i++) {
     yield Uint8List(65536); // 64 KB chunks
   }
 }
 await fs.writeFileStream(path, chunks());
-await fs.writeFileStream(path, chunks(), overwrite: false); // throws if exists
 
 // Read as stream (returns Stream<Uint8List>)
 await for (final chunk in fs.readFileStream(path)) {
@@ -116,17 +116,20 @@ await for (final chunk in fs.readFileStream(path)) {
 }
 ```
 
-### Bulk operations (parallel)
+### Bulk operations
 
 ```dart
-// Write 100 files with up to 10 concurrent writes
+// Atomic write (default) — all-or-nothing with rollback
 await fs.writeFiles(fileMap, maxConcurrency: 10);
 
-// Read multiple files concurrently (returns Map<String, Uint8List>)
+// Non-atomic write — skip failures, continue
+final errors = <String, Object>{};
+await fs.writeFiles(fileMap, atomic: false, onError: (path, e) => errors[path] = e);
+
+// Read multiple files concurrently
 final results = await fs.readFiles(paths, maxConcurrency: 10);
 
-// Handle individual failures without losing successful results
-final errors = <String, Object>{};
+// Read with partial results on failure
 final results = await fs.readFiles(
   paths,
   onError: (path, error) => errors[path] = error,
@@ -141,15 +144,16 @@ final results = await fs.readFiles(
 ### Rename, copy, and move
 
 ```dart
-await fs.renameFile(oldPath, newPath);           // atomic on native
-await fs.renameDirectory(oldDirPath, newDirPath); // atomic on native
+await fs.renameFile(oldPath, newPath);               // atomic on native
+await fs.renameDirectory(oldDirPath, newDirPath);     // atomic on native
 await fs.copyFile(sourcePath, destPath);
-await fs.moveFile(sourcePath, destPath);          // cross-device safe
+await fs.moveFile(sourcePath, destPath);              // cross-device safe
+await fs.moveDirectory(sourceDirPath, destDirPath);   // cross-device safe
 
-// With overwrite protection (throws FileAlreadyExistsException if dest exists)
-await fs.copyFile(sourcePath, destPath, overwrite: false);
-await fs.moveFile(sourcePath, destPath, overwrite: false);
-await fs.renameFile(oldPath, newPath, overwrite: false);
+// Overwrite explicitly (default is overwrite: false)
+await fs.copyFile(sourcePath, destPath, overwrite: true);
+await fs.moveFile(sourcePath, destPath, overwrite: true);
+await fs.renameFile(oldPath, newPath, overwrite: true);
 ```
 
 ### Directory operations
@@ -165,11 +169,48 @@ for (final entry in entries) {
 
 final allEntries = await fs.listDirectory(dirPath, recursive: true); // entire tree
 
-// Copy a directory (merge — overwrites conflicting files, keeps non-conflicting ones)
-await fs.copyDirectory(sourceDirPath, destDirPath);
-await fs.copyDirectory(sourceDirPath, destDirPath, overwrite: false); // throws on conflict
+// Copy a directory (merge — overwrites conflicting files with overwrite: true)
+await fs.copyDirectory(sourceDirPath, destDirPath, overwrite: true);
+
+// Move a directory (atomic rename on native, copy+delete fallback across devices)
+await fs.moveDirectory(sourceDirPath, destDirPath);
 
 await fs.deleteDirectory(dirPath, recursive: true);
+```
+
+### File change notifications
+
+```dart
+final fs = await DbasFileSystem.getInstance(
+  onFileChanged: (changes) {
+    for (final entry in changes.entries) {
+      final change = entry.value;
+      print('${change.type}: ${change.path}');
+      // FileChangeType.created, .modified, or .deleted
+    }
+  },
+);
+
+// Or set/update the callback later:
+fs.onFileChanged = (changes) { /* ... */ };
+
+// Notifications include before/after state:
+// change.oldEntry — null if created, set if modified/deleted
+// change.newEntry — null if deleted, set if created/modified
+```
+
+### Progress callbacks
+
+```dart
+await fs.copyFile(source, dest, overwrite: true, onProgress: (progress) {
+  print('File: ${progress.current.entry.path}');
+  print('Current: ${(progress.current.progress * 100).toInt()}%');
+  print('Overall: ${(progress.overall * 100).toInt()}%');
+});
+
+await fs.writeFiles(fileMap, onProgress: (progress) {
+  print('Writing ${progress.current.entry.path} — overall ${(progress.overall * 100).toInt()}%');
+});
 ```
 
 ### Lifecycle management
@@ -177,6 +218,9 @@ await fs.deleteDirectory(dirPath, recursive: true);
 ```dart
 // Release all resources (terminates web workers, resets singleton)
 await fs.dispose();
+
+// With custom timeout (default 30 seconds)
+await fs.dispose(timeout: const Duration(seconds: 10));
 
 // After dispose, getInstance() creates a fresh instance
 final freshFs = await DbasFileSystem.getInstance();
@@ -217,16 +261,24 @@ try {
   print(e.message);
 }
 
-// Bulk operations are NOT atomic — if one fails, others may have
-// already completed. No rollback is performed on partial failure.
+// Atomic bulk writes roll back on failure
 try {
   await fs.writeFiles({
     'path/a.bin': bytesA,
-    'path/b.bin': bytesB, // if this fails, a.bin may already exist
+    'path/b.bin': bytesB, // if this fails, a.bin is rolled back
   });
-} on DbasFileSystemException catch (e) {
-  print('Partial failure: ${e.message}');
+} on AtomicOperationException catch (e) {
+  print('Primary error: ${e.error}');
+  if (e.secondaryError != null) {
+    print('Rollback also failed: ${e.secondaryError}');
+    // Some files may not have been rolled back — verify state manually.
+  }
 }
+
+// Non-atomic bulk writes with error handling
+await fs.writeFiles(fileMap, atomic: false, onError: (path, error) {
+  print('Failed to write $path: $error');
+});
 ```
 
 ### Storage persistence (web)
@@ -244,58 +296,82 @@ if (!fs.isPersistentStorage) {
 
 | Method | Description |
 |--------|-------------|
-| `getInstance({workerPoolSize})` | Returns the singleton `DbasFileSystem` instance. |
-| `dispose()` | Releases all resources. Gives in-flight operations up to 30 seconds to finish, then forces teardown. |
+| `getInstance({workerPoolSize, onFileChanged})` | Returns the singleton `DbasFileSystem` instance. |
+| `dispose({timeout})` | Releases all resources. Gives in-flight operations up to `timeout` (default 30s) to finish, then forces teardown. |
 | `isDisposed` | `true` after `dispose()` has been called. Subsequent operations throw `StateError`. |
 | `isPersistentStorage` | Whether storage is persistent (always `true` on native; reflects browser grant on web). |
+| `onFileChanged` | Getter/setter for the file change notification callback. |
 | `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). Does not create directories. |
-| `writeFile(path, bytes, {overwrite})` | Writes a `Uint8List` to a file. |
-| `writeFileStream(path, stream, {overwrite})` | Writes a stream of byte chunks to a file. |
-| `appendFile(path, bytes)` | Appends bytes to a file (creates it if missing). |
-| `appendFileStream(path, stream)` | Appends a stream of byte chunks to a file (creates it if missing). |
-| `readFile(path)` | Reads a file as a `Uint8List`. |
-| `readFileStream(path, {chunkSize})` | Reads a file as a `Stream<Uint8List>`. |
-| `deleteFile(path)` | Deletes a file (no-op if missing). |
+| `writeFile(path, bytes, {overwrite, onProgress})` | Writes a `Uint8List` to a file. |
+| `writeFileStream(path, stream, {overwrite, onProgress})` | Writes a stream of byte chunks to a file. |
+| `appendFile(path, bytes, {onProgress})` | Appends bytes to a file (creates it if missing). |
+| `appendFileStream(path, stream, {onProgress})` | Appends a stream of byte chunks to a file (creates it if missing). |
+| `readFile(path, {onProgress})` | Reads a file as a `Uint8List`. |
+| `readFileStream(path, {chunkSize})` | Reads a file as a `Stream<Uint8List>`. Lock is held for the stream's lifetime. |
+| `deleteFile(path, {onProgress})` | Deletes a file (no-op if missing). |
 | `fileExists(path)` | Checks whether a file exists. |
-| `copyFile(source, dest, {overwrite})` | Copies a file. |
-| `moveFile(source, dest, {overwrite})` | Moves a file with cross-device fallback. |
-| `renameFile(oldPath, newPath, {overwrite})` | Renames a file (atomic on native, copy+delete on web). |
+| `copyFile(source, dest, {overwrite, onProgress})` | Copies a file with byte-level progress on native. |
+| `moveFile(source, dest, {overwrite, onProgress})` | Moves a file with cross-device fallback. |
+| `renameFile(oldPath, newPath, {overwrite, onProgress})` | Renames a file (atomic on native, copy+delete on web). |
 | `getFileSize(path)` | Returns the file size in bytes. |
 | `getLastModified(path)` | Returns the last modified timestamp (UTC). |
-| `writeFiles(files, {maxConcurrency, cancellationToken, onError})` | Writes multiple files concurrently (not atomic). |
-| `writeFilesStream(files, {maxConcurrency, cancellationToken, onError})` | Writes multiple files from streams concurrently (not atomic). |
-| `readFiles(paths, {maxConcurrency, cancellationToken, onError})` | Reads multiple files concurrently (not atomic). With `onError`, failed files are omitted from the result. |
-| `createDirectory(path, {recursive})` | Creates a directory. |
+| `writeFiles(files, {maxConcurrency, cancellationToken, onProgress, atomic, onError})` | Writes multiple files. Atomic by default (rollback on failure). Set `atomic: false` + `onError` for independent writes. |
+| `writeFilesStream(files, {maxConcurrency, cancellationToken, onProgress, atomic, onError})` | Writes multiple files from streams. Same atomic/non-atomic semantics as `writeFiles`. |
+| `readFiles(paths, {maxConcurrency, cancellationToken, onProgress, onError})` | Reads multiple files. Without `onError`, throws `MultiException` on any failure. With `onError`, returns partial results. |
+| `createDirectory(path, {recursive, onProgress})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
-| `listDirectory(path, {recursive})` | Lists typed entries (`FileSystemEntry` with `path` and `type`). With `recursive: true`, includes all nested entries. |
-| `deleteDirectory(path, {recursive})` | Deletes a directory. |
-| `renameDirectory(oldPath, newPath)` | Renames a directory (atomic on native, recursive copy+delete on web). |
-| `copyDirectory(source, dest, {overwrite})` | Copies a directory (merge: overwrites conflicting files, leaves non-conflicting ones). |
+| `listDirectory(path, {recursive})` | Lists typed entries (`FileSystemEntry` with `path` and `type`). |
+| `deleteDirectory(path, {recursive, onProgress})` | Deletes a directory. |
+| `renameDirectory(oldPath, newPath, {onProgress})` | Renames a directory (atomic on native, recursive copy+delete on web). |
+| `copyDirectory(source, dest, {overwrite, onProgress})` | Copies a directory (merge semantics). |
+| `moveDirectory(source, dest, {onProgress})` | Moves a directory with cross-device fallback. |
 
 ## Thread Safety
 
-All operations are routed through a per-path lock (`PathLock`). Concurrent operations on the **same path** are automatically serialized, while operations on **different paths** proceed in parallel. Both file and directory operations are locked.
+All operations are routed through a hierarchical per-path read-write lock (`PathLock`).
 
-- **Single-path operations** (`writeFile`, `readFile`, `createDirectory`, etc.) acquire the lock for their path.
-- **Multi-path operations** (`copyFile`, `moveFile`, `renameFile`, `renameDirectory`) lock both paths in sorted order to prevent deadlocks.
+- **File operations** acquire a **shared** lock on the parent directory and an **exclusive** lock on the file path. Two writes to different files in the same directory proceed in parallel. A directory delete blocks until child file operations complete.
+- **Non-destructive directory operations** (`listDirectory`, `directoryExists`, `createDirectory`) acquire a **shared** lock on the directory path, allowing concurrent access.
+- **Destructive directory operations** (`deleteDirectory`, `renameDirectory`, `moveDirectory`) acquire an **exclusive** lock that blocks all concurrent file and directory operations within that path.
+- **Multi-path operations** (`copyFile`, `moveFile`, `renameFile`, `renameDirectory`, `copyDirectory`, `moveDirectory`) lock all involved paths in sorted order to prevent deadlocks. Exclusive overrides shared when the same path appears in both lock sets.
 - **Bulk operations** (`writeFiles`, `readFiles`) run through the locked single-file methods with a configurable concurrency limit (`maxConcurrency`, default 10).
 - **Web worker pool** distributes work across N workers (default 4) for true parallel I/O via OPFS.
+- **Writer-priority**: When both readers and writers are waiting for a lock, writers are woken first to prevent starvation.
 
 ```
-Different paths  -> parallel (worker pool + PathLock allows both through)
-Same path        -> serialized (PathLock queues second operation until first completes)
-Bulk operations  -> bounded parallelism (ConcurrencyPool) + per-path serialization (PathLock)
+Different paths       -> parallel (shared parent locks coexist)
+Same path             -> serialized (exclusive file lock queues)
+Dir delete + child op -> serialized (exclusive dir lock blocks shared parent)
+Bulk operations       -> bounded parallelism (ConcurrencyPool) + per-path locking
 ```
+
+> **Stream lock behavior**: `readFileStream` holds the file path lock for the
+> entire stream lifetime. A slow consumer will block other operations on that
+> path until the stream completes or is cancelled.
 
 ## Bulk Operation Semantics
 
-Bulk operations (`writeFiles`, `readFiles`, `writeFilesStream`) are **not atomic**. If one operation fails mid-batch:
+### Atomic mode (default)
 
-- Operations already completed are **not rolled back**.
-- Operations currently in flight will **run to completion**.
-- Operations not yet started will be **skipped** (if a `CancellationToken` is used) or **attempted** (if not).
+`writeFiles` and `writeFilesStream` with `atomic: true` (default):
 
-If you need atomic semantics, perform writes individually and implement your own rollback logic.
+1. **Snapshot**: Existing file contents are saved for rollback.
+2. **Write**: All files are written concurrently.
+3. **On failure**: All successfully written files are rolled back (restored or deleted). Throws `AtomicOperationException` with the primary `error` and optional `secondaryError` if rollback itself partially failed.
+
+The `onError` callback is ignored in atomic mode.
+
+### Non-atomic mode
+
+`writeFiles` and `writeFilesStream` with `atomic: false`:
+
+- If `onError` is provided, individual failures invoke the callback and the operation continues.
+- If `onError` is `null`, throws on the first error.
+- **No rollback** is performed on partial failure.
+
+### Read operations
+
+`readFiles` without `onError` collects all errors and throws `MultiException`. With `onError`, failed files are omitted from the result map.
 
 ## Performance Tuning
 
@@ -304,6 +380,55 @@ If you need atomic semantics, perform writes individually and implement your own
 | `workerPoolSize` | 4 | Increase for web apps doing heavy parallel I/O. Each worker is a Web Worker thread. On native, this is ignored. |
 | `maxConcurrency` | 10 | Lower if bulk operations cause memory pressure (many large files). Raise if I/O is the bottleneck and files are small. |
 | `chunkSize` | 64 KB | Increase for large file streaming (e.g. 256 KB or 1 MB). Decrease for memory-constrained environments. Affects `readFileStream` on all platforms. |
+
+## Building
+
+### JS Worker minification
+
+The OPFS Web Worker source is at `web/libs/src/dbas_filesystem_worker.js`. CI automatically minifies it via esbuild and commits the output to `web/libs/`. To build locally:
+
+```bash
+# Linux / macOS / Git Bash
+bash scripts/minify-js-worker.sh
+
+# Windows PowerShell
+.\scripts\minify-js-worker.ps1
+```
+
+Both scripts install `esbuild` automatically if not found.
+
+## Migrating from v3.x to v4.x
+
+### Breaking changes
+
+1. **`overwrite` defaults to `false`**: All write, copy, move, and rename operations now throw `FileAlreadyExistsException` if the destination exists. Add `overwrite: true` where you intentionally replace files.
+
+   ```dart
+   // v3.x — silently overwrites
+   await fs.writeFile(path, bytes);
+
+   // v4.x — throws if file exists
+   await fs.writeFile(path, bytes);              // throws FileAlreadyExistsException
+   await fs.writeFile(path, bytes, overwrite: true); // explicit overwrite
+   ```
+
+2. **`writeFiles` / `writeFilesStream` are atomic by default**: Set `atomic: false` to restore the previous behavior with `onError`.
+
+   ```dart
+   // v3.x
+   await fs.writeFiles(files, onError: (p, e) => log(e));
+
+   // v4.x — atomic by default
+   await fs.writeFiles(files);                                    // atomic, throws AtomicOperationException
+   await fs.writeFiles(files, atomic: false, onError: (p, e) => log(e)); // non-atomic with onError
+   ```
+
+3. **`readFiles` without `onError` throws `MultiException`**: Previously threw the first error. Now collects all errors.
+
+   ```dart
+   // v4.x — collect partial results
+   final results = await fs.readFiles(paths, onError: (p, e) => log(e));
+   ```
 
 ## Migrating from v1.x to v2.x
 
@@ -355,7 +480,7 @@ Workers automatically restart on crash with exponential backoff (first 3 retries
 
 ### Native: Cross-device move fails
 
-`moveFile` automatically falls back to copy+delete when source and destination are on different filesystems. If the fallback also fails, the partial destination is cleaned up. Check disk space and permissions.
+`moveFile` and `moveDirectory` automatically fall back to copy+delete when source and destination are on different filesystems. If the fallback also fails, the partial destination is cleaned up. Check disk space and permissions.
 
 ## Minimum Platform Versions
 

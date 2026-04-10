@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
+import 'package:dbas_filesystem/src/dbas_filesystem_progress.dart';
 import 'dbas_filesystem_native_interface.dart';
 
 class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
@@ -19,7 +20,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   // ── Single file operations ────────────────────────────────────────────
 
   @override
-  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) async {
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = false}) async {
     final file = File(path);
     if (!overwrite && await file.exists()) {
       throw FileAlreadyExistsException(path);
@@ -34,7 +35,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) async {
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = false}) async {
     final file = File(path);
     if (!overwrite && await file.exists()) {
       throw FileAlreadyExistsException(path);
@@ -164,18 +165,37 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
+    final sourceFile = File(sourcePath);
     final destFile = File(destPath);
     final destExisted = await destFile.exists();
     if (!overwrite && destExisted) {
       throw FileAlreadyExistsException(destPath);
     }
+    int totalSize;
+    try {
+      totalSize = await sourceFile.length();
+    } on FileSystemException catch (e) {
+      _throwMapped(e, sourcePath);
+      rethrow;
+    }
     var succeeded = false;
     await destFile.parent.create(recursive: true);
+    int transferred = 0;
     final writer = destFile.openWrite();
     try {
-      await for (final chunk in File(sourcePath).openRead()) {
+      await for (final chunk in sourceFile.openRead()) {
         writer.add(chunk);
+        transferred += chunk.length;
+        if (onProgress != null && totalSize > 0) {
+          onProgress(OperationProgress(
+            current: CurrentEntryProgress(
+              entry: FileSystemEntry(path: destPath, type: FileSystemEntityType.file),
+              progress: (transferred / totalSize).clamp(0.0, 1.0),
+            ),
+            overall: (transferred / totalSize).clamp(0.0, 1.0),
+          ));
+        }
       }
       await writer.flush();
       succeeded = true;
@@ -191,7 +211,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     final source = File(sourcePath);
     final dest = File(destPath);
     if (!overwrite && await dest.exists()) {
@@ -206,7 +226,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
       final code = e.osError?.errorCode;
       if (code == 18 || code == 17) {
         try {
-          await copyFile(sourcePath, destPath);
+          await copyFile(sourcePath, destPath, overwrite: true, onProgress: onProgress);
         } catch (_) {
           // Clean up partial destination on copy failure
           if (await dest.exists()) {
@@ -229,7 +249,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) async {
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = false}) async {
     if (!overwrite && await File(newPath).exists()) {
       throw FileAlreadyExistsException(newPath);
     }
@@ -286,11 +306,23 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   Future<List<FileSystemEntry>> listDirectory(String path, {bool recursive = false}) async {
     try {
       final entities = await Directory(path).list(recursive: recursive).toList();
-      return entities.map((e) {
+      final entries = <FileSystemEntry>[];
+      for (final e in entities) {
         final normalized = e.path.replaceAll('\\', '/');
-        final type = e is File ? FileSystemEntityType.file : FileSystemEntityType.directory;
-        return FileSystemEntry(path: normalized, type: type);
-      }).toList();
+        FileSystemEntityType type;
+        if (e is File) {
+          type = FileSystemEntityType.file;
+        } else if (e is Directory) {
+          type = FileSystemEntityType.directory;
+        } else {
+          // Symlink — resolve target type.
+          type = await FileSystemEntity.isDirectory(e.path)
+              ? FileSystemEntityType.directory
+              : FileSystemEntityType.file;
+        }
+        entries.add(FileSystemEntry(path: normalized, type: type));
+      }
+      return entries;
     } on FileSystemException catch (e) {
       _throwMapped(e, path, isDirectory: true);
       rethrow;
@@ -325,7 +357,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) async {
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     final source = Directory(sourcePath);
     if (!await source.exists()) {
       throw DirectoryNotFoundException(sourcePath);
@@ -333,7 +365,13 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     await Directory(destPath).create(recursive: true);
     var sourcePrefix = sourcePath.replaceAll('\\', '/');
     if (!sourcePrefix.endsWith('/')) sourcePrefix = '$sourcePrefix/';
-    await for (final entity in source.list(recursive: true)) {
+
+    // Collect all entities for progress tracking.
+    final entities = await source.list(recursive: true).toList();
+    final total = entities.whereType<File>().length;
+    int completed = 0;
+
+    for (final entity in entities) {
       final normalizedEntity = entity.path.replaceAll('\\', '/');
       final relative = normalizedEntity.substring(sourcePrefix.length);
       final normalizedDest = destPath.replaceAll('\\', '/');
@@ -347,6 +385,47 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
         }
         await targetFile.parent.create(recursive: true);
         await entity.copy(targetPath);
+        completed++;
+        if (onProgress != null && total > 0) {
+          onProgress(OperationProgress(
+            current: CurrentEntryProgress(
+              entry: FileSystemEntry(path: targetPath, type: FileSystemEntityType.file),
+              progress: 1.0,
+            ),
+            overall: (completed / total).clamp(0.0, 1.0),
+          ));
+        }
+      }
+    }
+  }
+
+  @override
+  Future<void> moveDirectory(String sourcePath, String destPath, {ProgressCallback? onProgress}) async {
+    final source = Directory(sourcePath);
+    if (!await source.exists()) {
+      throw DirectoryNotFoundException(sourcePath);
+    }
+    try {
+      await source.rename(destPath);
+    } on FileSystemException catch (e) {
+      // Cross-device rename fails — fallback to copy+delete.
+      // EXDEV = 18 (Linux/macOS), ERROR_NOT_SAME_DEVICE = 17 (Windows)
+      final code = e.osError?.errorCode;
+      if (code == 18 || code == 17) {
+        try {
+          await copyDirectory(sourcePath, destPath, overwrite: true, onProgress: onProgress);
+        } catch (_) {
+          // Clean up partial destination on copy failure
+          final dest = Directory(destPath);
+          if (await dest.exists()) {
+            try { await dest.delete(recursive: true); } catch (_) {}
+          }
+          rethrow;
+        }
+        await source.delete(recursive: true);
+      } else {
+        _throwMapped(e, sourcePath, isDirectory: true);
+        rethrow;
       }
     }
   }
