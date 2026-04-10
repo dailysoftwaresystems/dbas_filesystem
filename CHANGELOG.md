@@ -1,3 +1,27 @@
+## 2.3.0
+
+### New features
+
+* **`overwrite` parameter on `copyFile`, `moveFile`, `renameFile`**: All three methods now accept `{bool overwrite = true}`. When `overwrite: false` and the destination already exists, throws `FileAlreadyExistsException`. Default behavior (`overwrite: true`) is unchanged — fully backwards compatible.
+* **Recursive `listDirectory`**: `listDirectory` now accepts `{bool recursive = false}`. When `true`, returns all entries in subdirectories as well. Default behavior is unchanged.
+
+### Fixes
+
+* **Web `readFileStream` backpressure**: Added `onPause`/`onResume` handlers with `pauseCompleter` pattern (matching native implementation). Slow consumers on web no longer cause unbounded memory growth. Also added a missing `cancelled` check after worker round-trip to prevent adding chunks to a cancelled stream.
+* **Web `moveFile` rollback safety**: Previously, if source deletion failed after a successful copy, the worker would delete the destination — destroying the user's data when `overwrite: true` had replaced a pre-existing file. Now the destination (with correct data) is preserved and the error propagates.
+* **`EPERM` error mapping**: Linux `EPERM` (error code 1, "Operation not permitted") now maps to `PermissionDeniedException`, alongside the existing `EACCES` (13) and Windows `ERROR_ACCESS_DENIED` (5) mappings.
+* **CI: test discovery**: Changed `flutter test test/dbas_filesystem_test.dart` to `flutter test test/` so new test files are automatically picked up.
+
+### Improvements
+
+* **`getAppFilePath` is now side-effect free**: No longer creates the application data directory on every call. Write operations (`writeFile`, `writeFileStream`) already create parent directories, so this was redundant. Callers that relied on the implicit directory creation should use `createDirectory` explicitly.
+* **`isTest()` cached at startup**: The `FLUTTER_TEST` environment variable check is now evaluated once at library load time instead of on every `getAppFilePath` call.
+* **DRY bulk operations**: The `onError` branching logic duplicated across `writeFiles`, `writeFilesStream`, and `readFiles` has been extracted into a shared `_withErrorHandler` helper.
+
+### Tests
+
+* 7 new tests: `copyFile`/`moveFile`/`renameFile` with `overwrite: false` (3 tests + 1 success case), recursive `listDirectory`, strengthened `writeFiles` `onError` callback with a real failure trigger.
+
 ## 2.2.2
 
 ### Fixes

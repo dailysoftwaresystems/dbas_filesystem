@@ -4,20 +4,11 @@ import 'package:path/path.dart' as path;
 
 Future<String> getAppFilePathImpl(String fileName, bool isTest) async {
   if (isTest) {
-    String filePath = path.join(Directory.current.path, 'test', 'files');
-    Directory dir = Directory(filePath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
+    final filePath = path.join(Directory.current.path, 'test', 'files');
     return path.join(filePath, fileName).replaceAll('\\', '/');
   }
 
   final directory = await getApplicationSupportDirectory();
   final dirPath = path.join(directory.path, 'dbas_files').replaceAll('\\', '/');
-  final dir = Directory(dirPath);
-
-  if (!await dir.exists()) {
-    await dir.create(recursive: true);
-  }
   return path.join(dirPath, fileName).replaceAll('\\', '/');
 }

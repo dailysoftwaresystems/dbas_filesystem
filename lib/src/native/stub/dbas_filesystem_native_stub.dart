@@ -30,11 +30,11 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<bool> fileExists(String path) => _unsupported();
   @override
-  Future<void> copyFile(String sourcePath, String destPath) => _unsupported();
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
   @override
-  Future<void> moveFile(String sourcePath, String destPath) => _unsupported();
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
   @override
-  Future<void> renameFile(String oldPath, String newPath) => _unsupported();
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) => _unsupported();
   @override
   Future<int> getFileSize(String path) => _unsupported();
   @override
@@ -44,7 +44,7 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<bool> directoryExists(String path) => _unsupported();
   @override
-  Future<List<String>> listDirectory(String path) => _unsupported();
+  Future<List<String>> listDirectory(String path, {bool recursive = false}) => _unsupported();
   @override
   Future<void> deleteDirectory(String path, {bool recursive = false}) => _unsupported();
   @override

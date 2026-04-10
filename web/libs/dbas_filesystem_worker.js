@@ -114,6 +114,7 @@ async function handleMessage(method, args) {
             const srcFile = await getFileObject(args.sourcePath);
             const destDir = await ensureParentDir(args.destPath);
             const destName = getFileName(args.destPath);
+            await assertNotExists(destDir, destName, args.destPath, args.overwrite);
             const destHandle = await destDir.getFileHandle(destName, { create: true });
             const writable = await destHandle.createWritable();
 
@@ -129,13 +130,17 @@ async function handleMessage(method, args) {
         }
 
         case 'moveFile': {
-            await handleMessage('copyFile', { sourcePath: args.sourcePath, destPath: args.destPath });
+            await handleMessage('copyFile', { sourcePath: args.sourcePath, destPath: args.destPath, overwrite: args.overwrite });
+            // If source delete fails, keep the destination (copy succeeded,
+            // data is intact) and let the error propagate. Rolling back the
+            // destination would destroy the data when overwrite replaced a
+            // pre-existing file.
             await handleMessage('deleteFile', { path: args.sourcePath });
             return true;
         }
 
         case 'renameFile': {
-            await handleMessage('moveFile', { sourcePath: args.oldPath, destPath: args.newPath });
+            await handleMessage('moveFile', { sourcePath: args.oldPath, destPath: args.newPath, overwrite: args.overwrite });
             return true;
         }
 
@@ -234,8 +239,12 @@ async function handleMessage(method, args) {
             const normalized = normalizePath(args.path);
             const prefix = normalized.length > 0 ? normalized + '/' : '';
             const entries = [];
-            for await (const [name] of dirHandle.entries()) {
-                entries.push(prefix + name);
+            if (args.recursive) {
+                await listDirectoryRecursive(dirHandle, prefix, entries);
+            } else {
+                for await (const [name] of dirHandle.entries()) {
+                    entries.push(prefix + name);
+                }
             }
             return entries;
         }
@@ -409,6 +418,15 @@ async function navigateToDir(dirPath) {
         dir = await dir.getDirectoryHandle(part);
     }
     return dir;
+}
+
+async function listDirectoryRecursive(dirHandle, prefix, entries) {
+    for await (const [name, handle] of dirHandle.entries()) {
+        entries.push(prefix + name);
+        if (handle.kind === 'directory') {
+            await listDirectoryRecursive(handle, prefix + name + '/', entries);
+        }
+    }
 }
 
 async function copyDirectoryRecursive(srcDirHandle, destPath) {

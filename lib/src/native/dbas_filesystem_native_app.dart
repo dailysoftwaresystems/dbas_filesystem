@@ -115,9 +115,12 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyFile(String sourcePath, String destPath) async {
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) async {
     final destFile = File(destPath);
     final destExisted = await destFile.exists();
+    if (!overwrite && destExisted) {
+      throw FileAlreadyExistsException(destPath);
+    }
     var succeeded = false;
     await destFile.parent.create(recursive: true);
     final writer = destFile.openWrite();
@@ -139,9 +142,12 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> moveFile(String sourcePath, String destPath) async {
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) async {
     final source = File(sourcePath);
     final dest = File(destPath);
+    if (!overwrite && await dest.exists()) {
+      throw FileAlreadyExistsException(destPath);
+    }
     await dest.parent.create(recursive: true);
     try {
       await source.rename(destPath);
@@ -176,7 +182,10 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> renameFile(String oldPath, String newPath) async {
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) async {
+    if (!overwrite && await File(newPath).exists()) {
+      throw FileAlreadyExistsException(newPath);
+    }
     try {
       final dest = File(newPath);
       await dest.parent.create(recursive: true);
@@ -222,9 +231,9 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<String>> listDirectory(String path) async {
+  Future<List<String>> listDirectory(String path, {bool recursive = false}) async {
     try {
-      final entities = await Directory(path).list().toList();
+      final entities = await Directory(path).list(recursive: recursive).toList();
       return entities.map((e) => e.path.replaceAll('\\', '/')).toList();
     } on FileSystemException catch (e) {
       _throwIfDirNotFound(e, path);
@@ -265,14 +274,14 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     final code = e.osError?.errorCode;
     // ENOENT = 2 (Linux/macOS/Windows)
     if (code == 2) throw FileNotFoundException(path);
-    // EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
-    if (code == 13 || code == 5) throw PermissionDeniedException(path);
+    // EPERM = 1 (Linux/macOS), EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
+    if (code == 1 || code == 13 || code == 5) throw PermissionDeniedException(path);
   }
 
   static void _throwIfDirNotFound(FileSystemException e, String path) {
     final code = e.osError?.errorCode;
     if (code == 2) throw DirectoryNotFoundException(path);
-    // EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
-    if (code == 13 || code == 5) throw PermissionDeniedException(path);
+    // EPERM = 1 (Linux/macOS), EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
+    if (code == 1 || code == 13 || code == 5) throw PermissionDeniedException(path);
   }
 }

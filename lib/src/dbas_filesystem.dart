@@ -117,24 +117,30 @@ class DbasFileSystem {
   /// Copies the file at [sourcePath] to [destPath], creating parent
   /// directories as needed.
   ///
+  /// If [overwrite] is `false` and the destination already exists, throws
+  /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> copyFile(String sourcePath, String destPath) =>
-      _platform.copyFile(sourcePath, destPath);
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) =>
+      _platform.copyFile(sourcePath, destPath, overwrite: overwrite);
 
   /// Moves the file at [sourcePath] to [destPath], creating parent
   /// directories as needed.
   ///
   /// Falls back to copy-then-delete when moving across filesystems.
+  /// If [overwrite] is `false` and the destination already exists, throws
+  /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> moveFile(String sourcePath, String destPath) =>
-      _platform.moveFile(sourcePath, destPath);
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) =>
+      _platform.moveFile(sourcePath, destPath, overwrite: overwrite);
 
   /// Renames the file at [oldPath] to [newPath], creating parent
   /// directories as needed.
   ///
+  /// If [overwrite] is `false` and the destination already exists, throws
+  /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> renameFile(String oldPath, String newPath) =>
-      _platform.renameFile(oldPath, newPath);
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) =>
+      _platform.renameFile(oldPath, newPath, overwrite: overwrite);
 
   // ── File metadata ─────────────────────────────────────────────────────
 
@@ -241,10 +247,11 @@ class DbasFileSystem {
 
   /// Lists the entries in the directory at [dirPath].
   ///
+  /// If [recursive] is `true`, lists all entries in subdirectories as well.
   /// Returns full paths normalized to forward slashes.
   /// Throws [DirectoryNotFoundException] if the directory does not exist.
-  Future<List<String>> listDirectory(String dirPath) =>
-      _platform.listDirectory(dirPath);
+  Future<List<String>> listDirectory(String dirPath, {bool recursive = false}) =>
+      _platform.listDirectory(dirPath, recursive: recursive);
 
   /// Deletes the directory at [dirPath]. No-op if it does not exist.
   ///

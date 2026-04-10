@@ -1,3 +1,5 @@
 import 'dart:io';
 
-bool isTestEnvironment() => Platform.environment.containsKey('FLUTTER_TEST');
+final bool _isTest = Platform.environment.containsKey('FLUTTER_TEST');
+
+bool isTestEnvironment() => _isTest;

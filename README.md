@@ -6,16 +6,17 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 
 - **File operations** &mdash; read, write, copy, move, rename, delete, and existence check.
 - **File metadata** &mdash; get file size and last modified timestamp.
-- **Overwrite protection** &mdash; `writeFile` and `writeFileStream` accept an `overwrite` parameter to prevent accidental overwrites.
+- **Overwrite protection** &mdash; `writeFile`, `writeFileStream`, `copyFile`, `moveFile`, and `renameFile` accept an `overwrite` parameter to prevent accidental overwrites.
 - **Stream support** &mdash; stream-based read and write for memory-efficient large file handling.
 - **Parallel bulk operations** &mdash; read or write multiple files concurrently with configurable `maxConcurrency`.
-- **Directory operations** &mdash; create, list, delete, rename, and existence check.
+- **Directory operations** &mdash; create, list (with optional recursive traversal), delete, rename, and existence check.
 - **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices. Partial destination is cleaned up on failure.
 - **Thread safety** &mdash; per-path locking for both files and directories. Concurrent operations on the same path are serialized; different paths proceed in parallel.
 - **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`.
 - **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web.
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
+- **Side-effect free path resolution** &mdash; `getAppFilePath` resolves paths without creating directories. Write operations create parent directories automatically.
 - **Lifecycle management** &mdash; `dispose()` releases all resources (terminates web workers, resets singleton).
 
 ## Platform Support
@@ -121,13 +122,19 @@ await fs.renameFile(oldPath, newPath);           // atomic on native
 await fs.renameDirectory(oldDirPath, newDirPath); // atomic on native
 await fs.copyFile(sourcePath, destPath);
 await fs.moveFile(sourcePath, destPath);          // cross-device safe
+
+// With overwrite protection (throws FileAlreadyExistsException if dest exists)
+await fs.copyFile(sourcePath, destPath, overwrite: false);
+await fs.moveFile(sourcePath, destPath, overwrite: false);
+await fs.renameFile(oldPath, newPath, overwrite: false);
 ```
 
 ### Directory operations
 
 ```dart
 await fs.createDirectory(dirPath);
-final entries = await fs.listDirectory(dirPath); // forward-slash paths on all platforms
+final entries = await fs.listDirectory(dirPath);                    // direct children only
+final allEntries = await fs.listDirectory(dirPath, recursive: true); // entire tree
 await fs.deleteDirectory(dirPath, recursive: true);
 ```
 
@@ -206,16 +213,16 @@ if (!fs.isPersistentStorage) {
 | `getInstance({workerPoolSize})` | Returns the singleton `DbasFileSystem` instance. |
 | `dispose()` | Releases all resources and resets the singleton. |
 | `isPersistentStorage` | Whether storage is persistent (always `true` on native; reflects browser grant on web). |
-| `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). |
+| `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). Does not create directories. |
 | `writeFile(path, bytes, {overwrite})` | Writes a `Uint8List` to a file. |
 | `writeFileStream(path, stream, {overwrite})` | Writes a stream of byte chunks to a file. |
 | `readFile(path)` | Reads a file as a `Uint8List`. |
 | `readFileStream(path, {chunkSize})` | Reads a file as a `Stream<Uint8List>`. |
 | `deleteFile(path)` | Deletes a file (no-op if missing). |
 | `fileExists(path)` | Checks whether a file exists. |
-| `copyFile(source, dest)` | Copies a file. |
-| `moveFile(source, dest)` | Moves a file with cross-device fallback. |
-| `renameFile(oldPath, newPath)` | Renames a file (atomic on native, copy+delete on web). |
+| `copyFile(source, dest, {overwrite})` | Copies a file. |
+| `moveFile(source, dest, {overwrite})` | Moves a file with cross-device fallback. |
+| `renameFile(oldPath, newPath, {overwrite})` | Renames a file (atomic on native, copy+delete on web). |
 | `getFileSize(path)` | Returns the file size in bytes. |
 | `getLastModified(path)` | Returns the last modified timestamp (UTC). |
 | `writeFiles(files, {maxConcurrency, cancellationToken, onError})` | Writes multiple files concurrently (not atomic). |
@@ -223,7 +230,7 @@ if (!fs.isPersistentStorage) {
 | `readFiles(paths, {maxConcurrency, cancellationToken, onError})` | Reads multiple files concurrently (not atomic). With `onError`, failed files are omitted from the result. |
 | `createDirectory(path, {recursive})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
-| `listDirectory(path)` | Lists entries in a directory (forward-slash paths). |
+| `listDirectory(path, {recursive})` | Lists entries in a directory (forward-slash paths). With `recursive: true`, includes all nested entries. |
 | `deleteDirectory(path, {recursive})` | Deletes a directory. |
 | `renameDirectory(oldPath, newPath)` | Renames a directory (atomic on native, recursive copy+delete on web). |
 

@@ -39,9 +39,9 @@ abstract class DbasFileSystemNativeInterface {
   Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536});
   Future<void> deleteFile(String path);
   Future<bool> fileExists(String path);
-  Future<void> copyFile(String sourcePath, String destPath);
-  Future<void> moveFile(String sourcePath, String destPath);
-  Future<void> renameFile(String oldPath, String newPath);
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true});
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true});
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true});
 
   // ── File metadata ─────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ abstract class DbasFileSystemNativeInterface {
 
   Future<void> createDirectory(String path, {bool recursive = true});
   Future<bool> directoryExists(String path);
-  Future<List<String>> listDirectory(String path);
+  Future<List<String>> listDirectory(String path, {bool recursive = false});
   Future<void> deleteDirectory(String path, {bool recursive = false});
   Future<void> renameDirectory(String oldPath, String newPath);
 }

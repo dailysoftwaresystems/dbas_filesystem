@@ -83,19 +83,19 @@ final class DbasFileSystemPlatform {
     return _lock.synchronized(path, () => _delegate.fileExists(path));
   }
 
-  Future<void> copyFile(String sourcePath, String destPath) {
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) {
     DbasPathValidator.validateAll([sourcePath, destPath]);
-    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.copyFile(sourcePath, destPath));
+    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.copyFile(sourcePath, destPath, overwrite: overwrite));
   }
 
-  Future<void> moveFile(String sourcePath, String destPath) {
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) {
     DbasPathValidator.validateAll([sourcePath, destPath]);
-    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.moveFile(sourcePath, destPath));
+    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.moveFile(sourcePath, destPath, overwrite: overwrite));
   }
 
-  Future<void> renameFile(String oldPath, String newPath) {
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) {
     DbasPathValidator.validateAll([oldPath, newPath]);
-    return _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameFile(oldPath, newPath));
+    return _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameFile(oldPath, newPath, overwrite: overwrite));
   }
 
   // ── File metadata ─────────────────────────────────────────────────────
@@ -112,28 +112,37 @@ final class DbasFileSystemPlatform {
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
+  /// Wraps a path-keyed task with an optional error handler.
+  /// If [onError] is null, returns [task] unchanged.
+  /// Otherwise, catches non-cancellation errors and invokes the callback.
+  static Future<T> Function() _withErrorHandler<T>(
+    String path,
+    Future<T> Function() task,
+    void Function(String path, Object error)? onError,
+    T fallback,
+  ) {
+    if (onError == null) return task;
+    return () async {
+      try {
+        return await task();
+      } catch (e) {
+        if (e is OperationCancelledException) rethrow;
+        onError(path, e);
+        return fallback;
+      }
+    };
+  }
+
   Future<void> writeFiles(
     Map<String, Uint8List> files, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
   }) {
-    if (onError == null) {
-      return ConcurrencyPool.runAll(
-        files.entries.map((e) => () => writeFile(e.key, e.value)),
-        maxConcurrency: maxConcurrency,
-        cancellationToken: cancellationToken,
-      );
-    }
     return ConcurrencyPool.runAll(
-      files.entries.map((e) => () async {
-        try {
-          await writeFile(e.key, e.value);
-        } catch (err) {
-          if (err is OperationCancelledException) rethrow;
-          onError(e.key, err);
-        }
-      }),
+      files.entries.map((e) => _withErrorHandler<void>(
+        e.key, () => writeFile(e.key, e.value), onError, null,
+      )),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
@@ -145,22 +154,10 @@ final class DbasFileSystemPlatform {
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
   }) {
-    if (onError == null) {
-      return ConcurrencyPool.runAll(
-        files.entries.map((e) => () => writeFileStream(e.key, e.value)),
-        maxConcurrency: maxConcurrency,
-        cancellationToken: cancellationToken,
-      );
-    }
     return ConcurrencyPool.runAll(
-      files.entries.map((e) => () async {
-        try {
-          await writeFileStream(e.key, e.value);
-        } catch (err) {
-          if (err is OperationCancelledException) rethrow;
-          onError(e.key, err);
-        }
-      }),
+      files.entries.map((e) => _withErrorHandler<void>(
+        e.key, () => writeFileStream(e.key, e.value), onError, null,
+      )),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
@@ -172,25 +169,13 @@ final class DbasFileSystemPlatform {
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
   }) async {
-    if (onError == null) {
-      final entries = await ConcurrencyPool.runAll(
-        paths.map((p) => () async => MapEntry(p, await readFile(p))),
-        maxConcurrency: maxConcurrency,
-        cancellationToken: cancellationToken,
-      );
-      return Map.fromEntries(entries);
-    }
-
     final entries = await ConcurrencyPool.runAll(
-      paths.map((p) => () async {
-        try {
-          return MapEntry<String, Uint8List?>(p, await readFile(p));
-        } catch (e) {
-          if (e is OperationCancelledException) rethrow;
-          onError(p, e);
-          return MapEntry<String, Uint8List?>(p, null);
-        }
-      }),
+      paths.map((p) => _withErrorHandler<MapEntry<String, Uint8List?>>(
+        p,
+        () async => MapEntry<String, Uint8List?>(p, await readFile(p)),
+        onError,
+        MapEntry<String, Uint8List?>(p, null),
+      )),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
@@ -213,9 +198,9 @@ final class DbasFileSystemPlatform {
     return _lock.synchronized(path, () => _delegate.directoryExists(path));
   }
 
-  Future<List<String>> listDirectory(String path) {
+  Future<List<String>> listDirectory(String path, {bool recursive = false}) {
     DbasPathValidator.validate(path);
-    return _lock.synchronized(path, () => _delegate.listDirectory(path));
+    return _lock.synchronized(path, () => _delegate.listDirectory(path, recursive: recursive));
   }
 
   Future<void> deleteDirectory(String path, {bool recursive = false}) {

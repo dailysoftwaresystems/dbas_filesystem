@@ -102,6 +102,30 @@ void main() {
     expect(await fs.readFile(destPath), equals(bytes));
   });
 
+  test('copyFile with overwrite: false throws FileAlreadyExistsException', () async {
+    final sourcePath = '$testDir/copy_ow_source.bin';
+    final destPath = '$testDir/copy_ow_dest.bin';
+    await fs.writeFile(sourcePath, Uint8List.fromList([1, 2, 3]));
+    await fs.writeFile(destPath, Uint8List.fromList([4, 5, 6]));
+
+    await expectLater(
+      () => fs.copyFile(sourcePath, destPath, overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+    // Original destination content should be unchanged
+    expect(await fs.readFile(destPath), equals(Uint8List.fromList([4, 5, 6])));
+  });
+
+  test('copyFile with overwrite: false succeeds when dest does not exist', () async {
+    final sourcePath = '$testDir/copy_ow_new_source.bin';
+    final destPath = '$testDir/copy_ow_new_dest.bin';
+    final bytes = Uint8List.fromList([1, 2, 3]);
+    await fs.writeFile(sourcePath, bytes);
+
+    await fs.copyFile(sourcePath, destPath, overwrite: false);
+    expect(await fs.readFile(destPath), equals(bytes));
+  });
+
   test('moveFile', () async {
     final sourcePath = '$testDir/move_source.bin';
     final destPath = '$testDir/move_dest.bin';
@@ -113,6 +137,21 @@ void main() {
     expect(await fs.fileExists(sourcePath), isFalse);
     expect(await fs.fileExists(destPath), isTrue);
     expect(await fs.readFile(destPath), equals(bytes));
+  });
+
+  test('moveFile with overwrite: false throws FileAlreadyExistsException', () async {
+    final sourcePath = '$testDir/move_ow_source.bin';
+    final destPath = '$testDir/move_ow_dest.bin';
+    await fs.writeFile(sourcePath, Uint8List.fromList([1, 2, 3]));
+    await fs.writeFile(destPath, Uint8List.fromList([4, 5, 6]));
+
+    await expectLater(
+      () => fs.moveFile(sourcePath, destPath, overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+    // Source should still exist, destination unchanged
+    expect(await fs.fileExists(sourcePath), isTrue);
+    expect(await fs.readFile(destPath), equals(Uint8List.fromList([4, 5, 6])));
   });
 
   // ── writeFile overwrite ───────────────────────────────────────────────
@@ -239,6 +278,21 @@ void main() {
     );
   });
 
+  test('renameFile with overwrite: false throws FileAlreadyExistsException', () async {
+    final oldPath = '$testDir/rename_ow_old.bin';
+    final newPath = '$testDir/rename_ow_new.bin';
+    await fs.writeFile(oldPath, Uint8List.fromList([1, 2, 3]));
+    await fs.writeFile(newPath, Uint8List.fromList([4, 5, 6]));
+
+    await expectLater(
+      () => fs.renameFile(oldPath, newPath, overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+    // Source should still exist, destination unchanged
+    expect(await fs.fileExists(oldPath), isTrue);
+    expect(await fs.readFile(newPath), equals(Uint8List.fromList([4, 5, 6])));
+  });
+
   test('renameDirectory moves contents and removes old path', () async {
     final oldDir = '$testDir/rename_dir_old';
     final newDir = '$testDir/rename_dir_new';
@@ -338,6 +392,27 @@ void main() {
 
     final names = entries.map((e) => e.split('/').last).toList()..sort();
     expect(names, equals(['a.bin', 'b.bin']));
+  });
+
+  test('listDirectory with recursive: true returns all nested entries', () async {
+    final dirPath = '$testDir/list_recursive';
+    await fs.createDirectory('$dirPath/sub1');
+    await fs.createDirectory('$dirPath/sub2');
+    await fs.writeFile('$dirPath/a.bin', Uint8List.fromList([1]));
+    await fs.writeFile('$dirPath/sub1/b.bin', Uint8List.fromList([2]));
+    await fs.writeFile('$dirPath/sub2/c.bin', Uint8List.fromList([3]));
+
+    final entries = await fs.listDirectory(dirPath, recursive: true);
+    final names = entries.map((e) => e.split('/').last).toList()..sort();
+
+    // Should include the directories and all nested files
+    expect(names, containsAll(['a.bin', 'b.bin', 'c.bin', 'sub1', 'sub2']));
+    // Non-recursive should only return direct children
+    final shallow = await fs.listDirectory(dirPath);
+    final shallowNames = shallow.map((e) => e.split('/').last).toList()..sort();
+    expect(shallowNames, equals(['a.bin', 'sub1', 'sub2']));
+
+    await fs.deleteDirectory(dirPath, recursive: true);
   });
 
   test('deleteDirectory', () async {
@@ -820,22 +895,19 @@ void main() {
     final newPath = '$testDir/onerror_write_new.bin';
     await fs.writeFile(existingPath, Uint8List.fromList([1]));
 
-    // Use writeFile individually with overwrite:false to set up a failure,
-    // then use writeFiles with the same constraint via individual calls.
-    // Since writeFiles always uses overwrite:true by default, we instead
-    // test readFiles which has a clearer failure path (missing file).
-    // Here we verify writeFiles + onError does not throw when all succeed.
+    // Trigger a real failure: write to a path containing a null byte
+    // which fails path validation, while another write succeeds.
     final errors = <String, Object>{};
     await fs.writeFiles(
       {
-        existingPath: Uint8List.fromList([99]),
         newPath: Uint8List.fromList([42]),
+        'invalid\x00path.bin': Uint8List.fromList([99]),
       },
       onError: (path, error) => errors[path] = error,
     );
 
-    expect(errors, isEmpty);
-    expect(await fs.readFile(existingPath), equals(Uint8List.fromList([99])));
+    expect(errors.length, equals(1));
+    expect(errors.containsKey('invalid\x00path.bin'), isTrue);
     expect(await fs.readFile(newPath), equals(Uint8List.fromList([42])));
   });
 

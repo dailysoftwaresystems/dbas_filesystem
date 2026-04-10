@@ -234,14 +234,27 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
     late StreamController<Uint8List> controller;
     bool cancelled = false;
+    Completer<void>? pauseCompleter;
     final worker = _pickWorker(); // pin for entire stream
 
     controller = StreamController<Uint8List>(
-      onCancel: () { cancelled = true; },
+      onPause: () { pauseCompleter = Completer<void>(); },
+      onResume: () {
+        pauseCompleter?.complete();
+        pauseCompleter = null;
+      },
+      onCancel: () {
+        cancelled = true;
+        pauseCompleter?.complete();
+        pauseCompleter = null;
+      },
       onListen: () async {
         try {
           int offset = 0;
           while (!cancelled) {
+            final pc = pauseCompleter;
+            if (pc != null) await pc.future;
+            if (cancelled) break;
             final result = await worker.send('readFileChunk', {
               'path': path,
               'offset': offset,
@@ -252,13 +265,13 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
               throw DbasFileSystemException('Unexpected response from worker for readFileChunk', path: path);
             }
             final bytes = _extractBytes(result);
-            if (bytes.isEmpty) break;
+            if (bytes.isEmpty || cancelled) break;
             controller.add(bytes);
             offset += bytes.length;
             if (offset >= (result['totalSize'] as num).toInt()) break;
           }
         } catch (e) {
-          if (!cancelled) controller.addError(e);
+          if (!cancelled && !controller.isClosed) controller.addError(e);
         } finally {
           if (!controller.isClosed) controller.close();
         }
@@ -279,18 +292,18 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> copyFile(String sourcePath, String destPath) async {
-    await _send('copyFile', {'sourcePath': sourcePath, 'destPath': destPath});
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+    await _send('copyFile', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
   }
 
   @override
-  Future<void> moveFile(String sourcePath, String destPath) async {
-    await _send('moveFile', {'sourcePath': sourcePath, 'destPath': destPath});
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) async {
+    await _send('moveFile', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
   }
 
   @override
-  Future<void> renameFile(String oldPath, String newPath) async {
-    await _send('renameFile', {'oldPath': oldPath, 'newPath': newPath});
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) async {
+    await _send('renameFile', {'oldPath': oldPath, 'newPath': newPath, 'overwrite': overwrite});
   }
 
   // ── File metadata ─────────────────────────────────────────────────────
@@ -325,8 +338,8 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<String>> listDirectory(String path) async {
-    final result = await _send('listDirectory', {'path': path});
+  Future<List<String>> listDirectory(String path, {bool recursive = false}) async {
+    final result = await _send('listDirectory', {'path': path, 'recursive': recursive});
     if (result is List) {
       return result.map((e) => e.toString()).toList();
     }

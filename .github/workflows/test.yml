@@ -29,7 +29,7 @@ jobs:
     - name: Analyze code
       run: flutter analyze
     - name: Run native tests
-      run: flutter test test/dbas_filesystem_test.dart
+      run: flutter test test/
     - name: Start ChromeDriver
       run: |
         chromedriver --port=4444 &
