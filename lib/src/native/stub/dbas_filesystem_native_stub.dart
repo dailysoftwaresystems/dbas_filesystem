@@ -12,6 +12,8 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   Never _unsupported() => throw UnsupportedError('Not supported on $_platform.');
 
   @override
+  bool get isPersistentStorage => _unsupported();
+  @override
   Future<void> initialize({int workerPoolSize = 4}) => _unsupported();
   @override
   Future<void> dispose() => _unsupported();

@@ -30,3 +30,8 @@ final class DirectoryNotEmptyException extends DbasFileSystemException {
   const DirectoryNotEmptyException(String path)
       : super('Directory is not empty', path: path);
 }
+
+final class OperationCancelledException extends DbasFileSystemException {
+  const OperationCancelledException()
+      : super('Operation was cancelled');
+}

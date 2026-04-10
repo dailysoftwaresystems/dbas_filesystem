@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
+
 class ConcurrencyPool {
   final int maxConcurrency;
   int _active = 0;
@@ -29,11 +31,24 @@ class ConcurrencyPool {
     }
   }
 
+  /// Runs all [tasks] with bounded concurrency.
+  ///
+  /// If a [cancellationToken] is provided, tasks that have not yet started
+  /// will throw [OperationCancelledException] once the token is cancelled.
+  /// Tasks already in flight will run to completion.
+  ///
+  /// Note: this uses [Future.wait] internally. If any task fails, the
+  /// returned future completes with that error. Other in-flight tasks
+  /// continue to completion but their results are discarded.
   static Future<List<T>> runAll<T>(
     Iterable<Future<T> Function()> tasks, {
     int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
   }) {
     final pool = ConcurrencyPool(maxConcurrency);
-    return Future.wait(tasks.map((t) => pool.run(t)));
+    return Future.wait(tasks.map((t) => pool.run(() {
+      cancellationToken?.throwIfCancelled();
+      return t();
+    })));
   }
 }

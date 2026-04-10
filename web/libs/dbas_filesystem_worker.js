@@ -36,16 +36,24 @@ async function handleMessage(method, args) {
             root = await navigator.storage.getDirectory();
             filesRoot = await root.getDirectoryHandle('dbas_files', { create: true });
 
+            let persistentStorage = true;
             if (navigator.storage && navigator.storage.persist) {
                 const alreadyPersisted = await navigator.storage.persisted();
                 if (!alreadyPersisted) {
-                    const isPersisted = await navigator.storage.persist();
-                    if (!isPersisted) {
-                        console.warn('Failed to request persistent file storage.');
+                    const granted = await navigator.storage.persist();
+                    persistentStorage = granted;
+                    if (!granted) {
+                        console.warn(
+                            'OPFS persistent storage was not granted. ' +
+                            'Data may be evicted under storage pressure. ' +
+                            'Check DbasFileSystem.isPersistentStorage at runtime.'
+                        );
                     }
                 }
+            } else {
+                persistentStorage = false;
             }
-            return true;
+            return { persistentStorage };
         }
 
         // ── Single file operations ──

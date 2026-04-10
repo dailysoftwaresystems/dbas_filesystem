@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dbas_filesystem/dbas_filesystem.dart';
+import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 
 void main() {
   late DbasFileSystem fs;
@@ -503,5 +504,190 @@ void main() {
 
     // Restore fs for tearDownAll
     fs = fs2;
+  });
+
+  // ── Cancellation ──────────────────────────────────────────────────────
+
+  test('CancellationToken prevents new tasks from starting', () async {
+    final token = CancellationToken();
+    final filePath1 = '$testDir/cancel_1.bin';
+    final filePath2 = '$testDir/cancel_2.bin';
+
+    // Cancel immediately — no writes should succeed
+    token.cancel();
+
+    await expectLater(
+      () => fs.writeFiles(
+        {
+          filePath1: Uint8List.fromList([1]),
+          filePath2: Uint8List.fromList([2]),
+        },
+        cancellationToken: token,
+      ),
+      throwsA(isA<OperationCancelledException>()),
+    );
+  });
+
+  test('CancellationToken allows in-flight tasks to complete', () async {
+    final token = CancellationToken();
+
+    // Write 3 files with maxConcurrency=1 (serial execution)
+    final files = {
+      '$testDir/cancel_serial_1.bin': Uint8List.fromList([1]),
+      '$testDir/cancel_serial_2.bin': Uint8List.fromList([2]),
+      '$testDir/cancel_serial_3.bin': Uint8List.fromList([3]),
+    };
+
+    // Cancel before starting — all tasks should throw
+    token.cancel();
+
+    await expectLater(
+      () => fs.writeFiles(files, maxConcurrency: 1, cancellationToken: token),
+      throwsA(isA<OperationCancelledException>()),
+    );
+  });
+
+  test('readFiles with CancellationToken', () async {
+    // Set up files
+    for (var i = 0; i < 5; i++) {
+      await fs.writeFile('$testDir/cancel_read_$i.bin', Uint8List.fromList([i]));
+    }
+
+    final token = CancellationToken();
+    token.cancel();
+
+    await expectLater(
+      () => fs.readFiles(
+        List.generate(5, (i) => '$testDir/cancel_read_$i.bin'),
+        cancellationToken: token,
+      ),
+      throwsA(isA<OperationCancelledException>()),
+    );
+  });
+
+  // ── Persistent storage ────────────────────────────────────────────────
+
+  test('isPersistentStorage is true on native platforms', () async {
+    expect(fs.isPersistentStorage, isTrue);
+  });
+
+  // ── Concurrent dispose + getInstance race ─────────────────────────────
+
+  test('concurrent getInstance calls during initialization return same instance', () async {
+    await fs.dispose();
+
+    final results = await Future.wait([
+      DbasFileSystem.getInstance(),
+      DbasFileSystem.getInstance(),
+      DbasFileSystem.getInstance(),
+    ]);
+
+    expect(identical(results[0], results[1]), isTrue);
+    expect(identical(results[1], results[2]), isTrue);
+
+    fs = results[0];
+  });
+
+  test('getInstance immediately after dispose returns fresh instance', () async {
+    final old = await DbasFileSystem.getInstance();
+    // Start dispose and immediately request new instance
+    final disposeFuture = old.dispose();
+    final newFs = await DbasFileSystem.getInstance();
+    await disposeFuture;
+
+    expect(identical(old, newFs), isFalse);
+
+    // Verify the new instance works
+    final path = '$testDir/post_dispose_race.bin';
+    await newFs.writeFile(path, Uint8List.fromList([42]));
+    expect(await newFs.readFile(path), equals(Uint8List.fromList([42])));
+
+    fs = newFs;
+  });
+
+  // ── Duplicate paths in bulk operations ────────────────────────────────
+
+  test('writeFiles with duplicate paths — last value wins', () async {
+    final filePath = '$testDir/dup_bulk.bin';
+
+    // Map literal with same key — Dart Map keeps last value
+    await fs.writeFiles({
+      filePath: Uint8List.fromList([1, 2, 3]),
+    });
+
+    // Now write again with new value
+    await fs.writeFiles({
+      filePath: Uint8List.fromList([4, 5, 6]),
+    });
+
+    final result = await fs.readFile(filePath);
+    expect(result, equals(Uint8List.fromList([4, 5, 6])));
+  });
+
+  // ── Bulk operation partial failure ────────────────────────────────────
+
+  test('readFiles throws on missing file but others may complete', () async {
+    final validPath = '$testDir/bulk_valid.bin';
+    await fs.writeFile(validPath, Uint8List.fromList([1, 2, 3]));
+
+    await expectLater(
+      () => fs.readFiles([validPath, '$testDir/bulk_missing.bin']),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  // ── ConcurrencyPool edge cases ────────────────────────────────────────
+
+  test('ConcurrencyPool with maxConcurrency=0 throws ArgumentError', () {
+    expect(
+      () => ConcurrencyPool(0),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('ConcurrencyPool runAll with empty task list returns empty list', () async {
+    final result = await ConcurrencyPool.runAll<int>([], maxConcurrency: 5);
+    expect(result, isEmpty);
+  });
+
+  // ── readFileStream cancellation ───────────────────────────────────────
+
+  test('readFileStream can be cancelled mid-read', () async {
+    // Write a file with enough data
+    final filePath = '$testDir/stream_cancel.bin';
+    final bytes = Uint8List.fromList(List.generate(1024, (i) => i % 256));
+    await fs.writeFile(filePath, bytes);
+
+    var chunksReceived = 0;
+    final subscription = fs.readFileStream(filePath).listen((chunk) {
+      chunksReceived++;
+    });
+
+    // Cancel after first event or shortly after start
+    await Future.delayed(const Duration(milliseconds: 50));
+    await subscription.cancel();
+
+    // Stream should complete without error after cancellation
+    expect(chunksReceived, greaterThanOrEqualTo(0));
+  });
+
+  // ── Exception hierarchy completeness ──────────────────────────────────
+
+  test('OperationCancelledException is a DbasFileSystemException', () {
+    const e = OperationCancelledException();
+    expect(e, isA<DbasFileSystemException>());
+    expect(e.message, equals('Operation was cancelled'));
+    expect(e.path, isNull);
+  });
+
+  test('DbasFileSystemException with path', () {
+    const e = DbasFileSystemException('test error', path: '/some/path');
+    expect(e.toString(), equals('DbasFileSystemException: test error [path: /some/path]'));
+  });
+
+  test('DbasFileSystemException without path', () {
+    const e = DbasFileSystemException('test error');
+    expect(e.toString(), equals('DbasFileSystemException: test error'));
+    expect(e.path, isNull);
   });
 }

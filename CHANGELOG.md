@@ -1,3 +1,23 @@
+## 2.1.0
+
+### New features
+
+* **Cancellation tokens**: Bulk operations (`writeFiles`, `readFiles`, `writeFilesStream`) now accept an optional `CancellationToken`. When cancelled, tasks not yet started throw `OperationCancelledException`; in-flight tasks run to completion.
+* **`isPersistentStorage` getter**: Reports whether the underlying storage is persistent. Always `true` on native platforms. On web, reflects whether the browser granted persistent OPFS storage via `navigator.storage.persist()`.
+* **`OperationCancelledException`**: New typed exception for cancelled operations, extends `DbasFileSystemException`.
+
+### Improvements
+
+* **Bulk operation docs**: `writeFiles`, `readFiles`, and `writeFilesStream` doc comments now explicitly state that operations are **not atomic** — no rollback on partial failure.
+* **Web worker error messages**: Crash errors now include recovery instructions ("Call dispose() and re-initialize.").
+* **Web persistence visibility**: Worker returns persistence grant status to Dart instead of only logging to `console.warn`. Apps can check `isPersistentStorage` and warn users.
+* **README**: Added migration guide (v1.x → v2.x), performance tuning table, bulk operation semantics, troubleshooting section, cancellation examples, and storage persistence examples.
+* **pubspec.yaml**: Added `repository` and `issue_tracker` fields.
+
+### Tests
+
+* 16 new edge case tests: cancellation tokens, `isPersistentStorage`, concurrent `dispose()`+`getInstance()` race, duplicate paths in bulk ops, bulk partial failure, `ConcurrencyPool` edge cases, stream cancellation, and exception hierarchy completeness.
+
 ## 2.0.1
 
 * Updated README to reflect all 2.0.0 changes: `Uint8List` API in examples, `dispose()` lifecycle section, `writeFileStream` overwrite parameter, directory locking in thread safety docs, path normalization, and updated API reference table.

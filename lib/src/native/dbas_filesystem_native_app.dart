@@ -6,6 +6,9 @@ import 'dbas_filesystem_native_interface.dart';
 
 class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   @override
+  bool get isPersistentStorage => true;
+
+  @override
   Future<void> initialize({int workerPoolSize = 4}) async {}
 
   @override

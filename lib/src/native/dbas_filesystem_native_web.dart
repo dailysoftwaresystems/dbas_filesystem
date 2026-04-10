@@ -22,7 +22,9 @@ class _WorkerHandle {
 
   Future<dynamic> send(String method, [Map<String, dynamic>? args]) {
     if (_crashed) {
-      return Future.error(DbasFileSystemException('Worker has crashed.'));
+      return Future.error(DbasFileSystemException(
+        'Worker has crashed. Call dispose() and re-initialize.',
+      ));
     }
     final id = _nextRequestId++;
     final completer = Completer<dynamic>();
@@ -72,7 +74,11 @@ class _WorkerHandle {
 
   void _onError(web.Event event) {
     _crashed = true;
-    final error = DbasFileSystemException('Worker crashed unexpectedly.');
+    // All pending and future requests will receive this error, including
+    // pinned workers mid-stream (readFileStream / writeFileStream).
+    final error = DbasFileSystemException(
+      'Worker crashed unexpectedly. Call dispose() and re-initialize.',
+    );
     for (final completer in _pendingRequests.values) {
       if (!completer.isCompleted) completer.completeError(error);
     }
@@ -130,11 +136,15 @@ Uint8List _extractBytes(dynamic result) {
 class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   final List<_WorkerHandle> _workers = [];
   bool _initialized = false;
+  bool _isPersistentStorage = false;
   int _nextStreamId = 0;
 
   DbasFileSystemNativeWeb();
 
   static void registerWith(Registrar registrar) {}
+
+  @override
+  bool get isPersistentStorage => _isPersistentStorage;
 
   // ── Worker pool ───────────────────────────────────────────────────────
 
@@ -158,14 +168,18 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
 
     try {
       const workerUrl = 'assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js';
-      final initFutures = <Future<void>>[];
+      final initFutures = <Future<dynamic>>[];
       for (var i = 0; i < workerPoolSize; i++) {
         final worker = web.Worker(workerUrl.toJS);
         final handle = _WorkerHandle(worker);
         _workers.add(handle);
         initFutures.add(handle.send('initialize'));
       }
-      await Future.wait(initFutures);
+      final results = await Future.wait(initFutures);
+      // All workers share the same storage context; check persistence from the first.
+      if (results.isNotEmpty && results.first is Map) {
+        _isPersistentStorage = (results.first as Map)['persistentStorage'] == true;
+      }
       _initialized = true;
     } catch (e) {
       for (final w in _workers) {
@@ -184,6 +198,7 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     }
     _workers.clear();
     _initialized = false;
+    _isPersistentStorage = false;
   }
 
   // ── Single file operations ────────────────────────────────────────────

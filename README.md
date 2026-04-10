@@ -131,6 +131,24 @@ final freshFs = await DbasFileSystem.getInstance();
 // Calling methods on a disposed instance throws StateError
 ```
 
+### Cancellation
+
+```dart
+final token = CancellationToken();
+
+// Start a bulk write in the background
+final future = fs.writeFiles(largeFileMap, cancellationToken: token);
+
+// Cancel later — tasks not yet started are skipped, in-flight tasks complete
+token.cancel();
+
+try {
+  await future;
+} on OperationCancelledException {
+  print('Write was cancelled');
+}
+```
+
 ### Error handling
 
 ```dart
@@ -138,8 +156,32 @@ try {
   await fs.readFile('/nonexistent');
 } on FileNotFoundException catch (e) {
   print(e.path); // '/nonexistent'
+} on OperationCancelledException {
+  print('Operation was cancelled');
 } on DbasFileSystemException catch (e) {
   print(e.message);
+}
+
+// Bulk operations are NOT atomic — if one fails, others may have
+// already completed. No rollback is performed on partial failure.
+try {
+  await fs.writeFiles({
+    'path/a.bin': bytesA,
+    'path/b.bin': bytesB, // if this fails, a.bin may already exist
+  });
+} on DbasFileSystemException catch (e) {
+  print('Partial failure: ${e.message}');
+}
+```
+
+### Storage persistence (web)
+
+```dart
+final fs = await DbasFileSystem.getInstance();
+
+// Check if the browser granted persistent storage
+if (!fs.isPersistentStorage) {
+  print('Warning: data may be evicted under storage pressure');
 }
 ```
 
@@ -149,6 +191,7 @@ try {
 |--------|-------------|
 | `getInstance({workerPoolSize})` | Returns the singleton `DbasFileSystem` instance. |
 | `dispose()` | Releases all resources and resets the singleton. |
+| `isPersistentStorage` | Whether storage is persistent (always `true` on native; reflects browser grant on web). |
 | `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). |
 | `writeFile(path, bytes, {overwrite})` | Writes a `Uint8List` to a file. |
 | `writeFileStream(path, stream, {overwrite})` | Writes a stream of byte chunks to a file. |
@@ -161,9 +204,9 @@ try {
 | `renameFile(oldPath, newPath)` | Renames a file (atomic on native, copy+delete on web). |
 | `getFileSize(path)` | Returns the file size in bytes. |
 | `getLastModified(path)` | Returns the last modified timestamp (UTC). |
-| `writeFiles(files, {maxConcurrency})` | Writes multiple files (`Map<String, Uint8List>`) concurrently. |
-| `writeFilesStream(files, {maxConcurrency})` | Writes multiple files from streams concurrently. |
-| `readFiles(paths, {maxConcurrency})` | Reads multiple files concurrently, returns `Map<String, Uint8List>`. |
+| `writeFiles(files, {maxConcurrency, cancellationToken})` | Writes multiple files concurrently (not atomic). |
+| `writeFilesStream(files, {maxConcurrency, cancellationToken})` | Writes multiple files from streams concurrently (not atomic). |
+| `readFiles(paths, {maxConcurrency, cancellationToken})` | Reads multiple files concurrently (not atomic). |
 | `createDirectory(path, {recursive})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
 | `listDirectory(path)` | Lists entries in a directory (forward-slash paths). |
@@ -184,6 +227,72 @@ Different paths  -> parallel (worker pool + PathLock allows both through)
 Same path        -> serialized (PathLock queues second operation until first completes)
 Bulk operations  -> bounded parallelism (ConcurrencyPool) + per-path serialization (PathLock)
 ```
+
+## Bulk Operation Semantics
+
+Bulk operations (`writeFiles`, `readFiles`, `writeFilesStream`) are **not atomic**. If one operation fails mid-batch:
+
+- Operations already completed are **not rolled back**.
+- Operations currently in flight will **run to completion**.
+- Operations not yet started will be **skipped** (if a `CancellationToken` is used) or **attempted** (if not).
+
+If you need atomic semantics, perform writes individually and implement your own rollback logic.
+
+## Performance Tuning
+
+| Parameter | Default | When to adjust |
+|-----------|---------|---------------|
+| `workerPoolSize` | 4 | Increase for web apps doing heavy parallel I/O. Each worker is a Web Worker thread. On native, this is ignored. |
+| `maxConcurrency` | 10 | Lower if bulk operations cause memory pressure (many large files). Raise if I/O is the bottleneck and files are small. |
+| `chunkSize` | 64 KB | Increase for large file streaming (e.g. 256 KB or 1 MB). Decrease for memory-constrained environments. Only affects web `readFileStream`. |
+
+## Migrating from v1.x to v2.x
+
+### Breaking changes
+
+1. **`Uint8List` API**: All byte parameters and return types changed from `List<int>` to `Uint8List`.
+
+   ```dart
+   // v1.x
+   await fs.writeFile(path, [1, 2, 3]);
+   final List<int> bytes = await fs.readFile(path);
+
+   // v2.x
+   await fs.writeFile(path, Uint8List.fromList([1, 2, 3]));
+   final Uint8List bytes = await fs.readFile(path);
+   ```
+
+2. **`dispose()` added**: Instances must be disposed when no longer needed. Using a disposed instance throws `StateError`.
+
+3. **Bulk operations removed from native interface**: Now handled exclusively by the platform layer. If you extended the native interface, remove bulk method overrides.
+
+## Troubleshooting
+
+### Web: "OPFS is not supported in this browser"
+
+OPFS requires a modern browser (Chrome 102+, Firefox 111+, Safari 15.2+). Ensure your users are on a supported browser. OPFS is **not available** in:
+- Older browsers
+- Some privacy-focused browsers
+- Web views that don't support the Storage Foundation API
+
+### Web: `isPersistentStorage` is `false`
+
+The browser denied the persistent storage request. This means data may be evicted under storage pressure (e.g. low disk space). Common causes:
+- The site isn't bookmarked or frequently visited (Chrome heuristic)
+- The user denied the permission prompt
+- Private/incognito browsing mode
+
+Your app should handle this gracefully — check `isPersistentStorage` after initialization and warn the user if needed.
+
+### Web: Worker crashes
+
+If all workers crash, operations throw `DbasFileSystemException` with message "All workers have crashed". Call `dispose()` and re-initialize with `getInstance()`. Common causes:
+- Browser memory pressure killing Web Workers
+- OPFS quota exceeded
+
+### Native: Cross-device move fails
+
+`moveFile` automatically falls back to copy+delete when source and destination are on different filesystems. If the fallback also fails, the partial destination is cleaned up. Check disk space and permissions.
 
 ## Minimum Platform Versions
 

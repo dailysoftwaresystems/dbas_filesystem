@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dbas_filesystem/src/dbas_filesystem_platform.dart';
+import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_platform_util.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_io.dart'
   if (dart.library.js_interop) 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_web.dart';
@@ -53,6 +54,13 @@ class DbasFileSystem {
     _initCompleter = null;
     await _platform.dispose();
   }
+
+  /// Whether the underlying storage is persistent (survives browser eviction).
+  ///
+  /// Always `true` on native platforms (Android, iOS, macOS, Linux, Windows).
+  /// On web, reflects whether the browser granted persistent OPFS storage.
+  /// If `false`, data may be evicted under storage pressure.
+  bool get isPersistentStorage => _platform.isPersistentStorage;
 
   // ── Path helpers ──────────────────────────────────────────────────────
 
@@ -147,20 +155,53 @@ class DbasFileSystem {
   ///
   /// Each entry in [files] maps a file path to its byte content.
   /// Per-path locking still applies — same-path operations serialize.
-  Future<void> writeFiles(Map<String, Uint8List> files, {int maxConcurrency = 10}) =>
-      _platform.writeFiles(files, maxConcurrency: maxConcurrency);
+  ///
+  /// If [cancellationToken] is provided and cancelled, tasks that have not
+  /// yet started will throw [OperationCancelledException]. Tasks already in
+  /// flight will run to completion.
+  ///
+  /// **Not atomic**: if one write fails, others may have already completed
+  /// or still be in flight. No rollback is performed on partial failure.
+  Future<void> writeFiles(
+    Map<String, Uint8List> files, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) =>
+      _platform.writeFiles(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
 
   /// Writes multiple files from streams concurrently, bounded by
   /// [maxConcurrency].
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) =>
-      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency);
+  ///
+  /// If [cancellationToken] is provided and cancelled, tasks that have not
+  /// yet started will throw [OperationCancelledException]. Tasks already in
+  /// flight will run to completion.
+  ///
+  /// **Not atomic**: if one write fails, others may have already completed
+  /// or still be in flight. No rollback is performed on partial failure.
+  Future<void> writeFilesStream(
+    Map<String, Stream<List<int>>> files, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) =>
+      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
 
   /// Reads multiple files concurrently, bounded by [maxConcurrency].
   ///
   /// Returns a map from file path to byte content.
   /// Throws [FileNotFoundException] if any file does not exist.
-  Future<Map<String, Uint8List>> readFiles(List<String> paths, {int maxConcurrency = 10}) =>
-      _platform.readFiles(paths, maxConcurrency: maxConcurrency);
+  ///
+  /// If [cancellationToken] is provided and cancelled, tasks that have not
+  /// yet started will throw [OperationCancelledException]. Tasks already in
+  /// flight will run to completion.
+  ///
+  /// **Not atomic**: if one read fails, others may have already completed
+  /// or still be in flight.
+  Future<Map<String, Uint8List>> readFiles(
+    List<String> paths, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) =>
+      _platform.readFiles(paths, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
 
   // ── Directory operations ──────────────────────────────────────────────
 

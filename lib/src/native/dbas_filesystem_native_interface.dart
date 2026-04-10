@@ -23,6 +23,11 @@ abstract class DbasFileSystemNativeInterface {
     return DbasFileSystemNativeApp();
   }
 
+  /// Whether the underlying storage is persistent (survives browser eviction).
+  /// Always `true` on native platforms. On web, reflects whether the browser
+  /// granted persistent OPFS storage.
+  bool get isPersistentStorage;
+
   Future<void> initialize({int workerPoolSize = 4});
   Future<void> dispose();
 

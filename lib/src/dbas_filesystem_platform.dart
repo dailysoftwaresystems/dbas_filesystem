@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_path_lock.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_path_validator.dart';
@@ -17,6 +18,8 @@ final class DbasFileSystemPlatform {
     await delegate.initialize(workerPoolSize: workerPoolSize);
     return DbasFileSystemPlatform._(delegate);
   }
+
+  bool get isPersistentStorage => _delegate.isPersistentStorage;
 
   Future<void> dispose() async {
     await _lock.dispose();
@@ -108,24 +111,39 @@ final class DbasFileSystemPlatform {
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
-  Future<void> writeFiles(Map<String, Uint8List> files, {int maxConcurrency = 10}) {
+  Future<void> writeFiles(
+    Map<String, Uint8List> files, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) {
     return ConcurrencyPool.runAll(
       files.entries.map((e) => () => writeFile(e.key, e.value)),
       maxConcurrency: maxConcurrency,
+      cancellationToken: cancellationToken,
     );
   }
 
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) {
+  Future<void> writeFilesStream(
+    Map<String, Stream<List<int>>> files, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) {
     return ConcurrencyPool.runAll(
       files.entries.map((e) => () => writeFileStream(e.key, e.value)),
       maxConcurrency: maxConcurrency,
+      cancellationToken: cancellationToken,
     );
   }
 
-  Future<Map<String, Uint8List>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
+  Future<Map<String, Uint8List>> readFiles(
+    List<String> paths, {
+    int maxConcurrency = 10,
+    CancellationToken? cancellationToken,
+  }) async {
     final entries = await ConcurrencyPool.runAll(
       paths.map((p) => () async => MapEntry(p, await readFile(p))),
       maxConcurrency: maxConcurrency,
+      cancellationToken: cancellationToken,
     );
     return Map.fromEntries(entries);
   }
