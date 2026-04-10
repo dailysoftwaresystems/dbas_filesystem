@@ -1,5 +1,10 @@
-group = "com.example.dbas_filesystem"
-version = "1.0-SNAPSHOT"
+// Read properties from pubspec.yaml
+val pubspecFile = file("../pubspec.yaml").readText()
+val pubspecName = Regex("^name:\\s*(.+)$", RegexOption.MULTILINE).find(pubspecFile)!!.groupValues[1].trim()
+val pubspecVersion = Regex("^version:\\s*(.+)$", RegexOption.MULTILINE).find(pubspecFile)!!.groupValues[1].trim()
+
+group = "com.example.$pubspecName"
+version = pubspecVersion
 
 buildscript {
     val kotlinVersion = "2.2.20"
@@ -50,7 +55,7 @@ android {
     }
 
     defaultConfig {
-        minSdk = 24
+        minSdk = 35
     }
 
     testOptions {

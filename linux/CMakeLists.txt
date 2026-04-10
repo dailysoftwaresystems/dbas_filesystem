@@ -1,7 +1,16 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14...3.27)
 
-set(PROJECT_NAME "dbas_filesystem")
-project(${PROJECT_NAME} LANGUAGES CXX)
+# Read properties from pubspec.yaml
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../pubspec.yaml" PUBSPEC_CONTENT)
+string(REGEX MATCH "name: ([^\n]+)" _ "${PUBSPEC_CONTENT}")
+set(PUBSPEC_NAME "${CMAKE_MATCH_1}")
+string(REGEX MATCH "version: ([^\n]+)" _ "${PUBSPEC_CONTENT}")
+set(PUBSPEC_VERSION "${CMAKE_MATCH_1}")
+string(REGEX MATCH "description: \"?([^\"\n]+)\"?" _ "${PUBSPEC_CONTENT}")
+set(PUBSPEC_DESCRIPTION "${CMAKE_MATCH_1}")
+
+set(PROJECT_NAME "${PUBSPEC_NAME}")
+project(${PROJECT_NAME} VERSION ${PUBSPEC_VERSION} DESCRIPTION "${PUBSPEC_DESCRIPTION}" LANGUAGES CXX)
 
 set(PLUGIN_NAME "dbas_filesystem_plugin")
 

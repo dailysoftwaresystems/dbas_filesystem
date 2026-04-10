@@ -1,11 +1,13 @@
 name: dbas_filesystem
-description: "Flutter plugin for cross-platform file system operations with stream and byte[] support."
-version: 0.0.1
-homepage:
+description: "Flutter plugin for cross-platform file system operations with streaming, byte array, and directory support across Android, iOS, macOS, Linux, Windows, and Web (OPFS)."
+version: 1.0.0
+homepage: https://github.com/dailysoftwaresystems/DBAS.FileSystem.Dart
+author_name: Daily Software Systems
+author_email: dailysoftwaresystems@dailysoftwaresystems.com
 
 environment:
   sdk: ^3.11.4
-  flutter: '>=3.41.0'
+  flutter: '>=3.41.4'
 
 dependencies:
   flutter:
