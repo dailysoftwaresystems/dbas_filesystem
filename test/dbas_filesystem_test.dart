@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
@@ -405,5 +406,102 @@ void main() {
     expect(filePath, contains('test'));
     expect(filePath, contains('files'));
     expect(filePath, endsWith('test_file.bin'));
+  });
+
+  // ── Path validation ───────────────────────────────────────────────────
+
+  test('empty path throws ArgumentError', () {
+    expect(() => fs.writeFile('', Uint8List(0)), throwsArgumentError);
+  });
+
+  test('blank path throws ArgumentError', () {
+    expect(() => fs.writeFile('   ', Uint8List(0)), throwsArgumentError);
+  });
+
+  test('path with null byte throws ArgumentError', () {
+    expect(() => fs.writeFile('foo\x00bar', Uint8List(0)), throwsArgumentError);
+  });
+
+  // ── Concurrency ───────────────────────────────────────────────────────
+
+  test('same-path operations serialize', () async {
+    final filePath = '$testDir/serial_test.bin';
+    final gate = Completer<void>();
+    var writeCompleted = false;
+
+    // Start a write that blocks on a gate
+    final f1 = fs.writeFileStream(
+      filePath,
+      () async* {
+        await gate.future;
+        yield Uint8List.fromList([1, 2, 3]);
+      }(),
+    ).then((_) => writeCompleted = true);
+
+    // Start a read on the same path — must wait for write to finish
+    final f2 = fs.readFile(filePath).then((bytes) {
+      // When the read starts, the write must have already completed
+      expect(writeCompleted, isTrue);
+      return bytes;
+    });
+
+    // Release the gate so the write can proceed
+    gate.complete();
+    await Future.wait([f1, f2]);
+  });
+
+  test('different-path operations run in parallel', () async {
+    final pathA = '$testDir/parallel_a.bin';
+    final pathB = '$testDir/parallel_b.bin';
+
+    final aStarted = Completer<void>();
+    final bStarted = Completer<void>();
+    final gate = Completer<void>();
+
+    final fA = fs.writeFileStream(pathA, () async* {
+      aStarted.complete();
+      await gate.future;
+      yield Uint8List.fromList([1]);
+    }());
+
+    final fB = fs.writeFileStream(pathB, () async* {
+      bStarted.complete();
+      await gate.future;
+      yield Uint8List.fromList([2]);
+    }());
+
+    // Both generators should start since they're on different paths.
+    // If they were serialized, bStarted would never complete (blocked behind gate).
+    await aStarted.future.timeout(const Duration(seconds: 2));
+    await bStarted.future.timeout(const Duration(seconds: 2));
+
+    gate.complete();
+    await Future.wait([fA, fB]);
+  });
+
+  // ── Disposal lifecycle ────────────────────────────────────────────────
+
+  test('operations after dispose throw StateError', () async {
+    final fs1 = await DbasFileSystem.getInstance();
+    await fs1.dispose();
+
+    expect(
+      () => fs1.writeFile('any/path.bin', Uint8List(0)),
+      throwsA(isA<StateError>()),
+    );
+
+    // Re-create for subsequent tests
+    fs = await DbasFileSystem.getInstance();
+  });
+
+  test('getInstance after dispose returns new instance', () async {
+    final fs1 = await DbasFileSystem.getInstance();
+    await fs1.dispose();
+    final fs2 = await DbasFileSystem.getInstance();
+
+    expect(identical(fs1, fs2), isFalse);
+
+    // Restore fs for tearDownAll
+    fs = fs2;
   });
 }

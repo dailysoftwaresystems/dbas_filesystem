@@ -16,7 +16,12 @@ self.onmessage = async function (e) {
         }
         self.postMessage({ id, result });
     } catch (error) {
-        self.postMessage({ id, error: error.message || String(error) });
+        if (error && error.fsCode) {
+            self.postMessage({ id, error: { code: error.fsCode, path: error.fsPath || null } });
+        } else {
+            const msg = error ? (error.message || String(error)) : 'Unknown error';
+            self.postMessage({ id, error: { code: 'UNKNOWN', message: msg } });
+        }
     }
 };
 
@@ -188,7 +193,7 @@ async function handleMessage(method, args) {
                         parentDir = await parentDir.getDirectoryHandle(part);
                     } catch (e) {
                         if (e.name === 'NotFoundError') {
-                            throw new Error('Directory not found: ' + args.path);
+                            throw fsError('DIRECTORY_NOT_FOUND', args.path);
                         }
                         throw e;
                     }
@@ -215,7 +220,7 @@ async function handleMessage(method, args) {
             try {
                 dirHandle = await navigateToDir(args.path);
             } catch (e) {
-                if (e.name === 'NotFoundError') throw new Error('Directory not found: ' + args.path);
+                if (e.name === 'NotFoundError') throw fsError('DIRECTORY_NOT_FOUND', args.path);
                 throw e;
             }
             const normalized = normalizePath(args.path);
@@ -256,7 +261,7 @@ async function handleMessage(method, args) {
             if (!args.recursive) {
                 const dirHandle = await parentDir.getDirectoryHandle(dirName);
                 for await (const _ of dirHandle.entries()) {
-                    throw new Error('Directory is not empty: ' + args.path);
+                    throw fsError('DIRECTORY_NOT_EMPTY', args.path);
                 }
             }
 
@@ -273,7 +278,7 @@ async function handleMessage(method, args) {
             try {
                 srcDir = await navigateToDir(args.oldPath);
             } catch (e) {
-                if (e.name === 'NotFoundError') throw new Error('Directory not found: ' + args.oldPath);
+                if (e.name === 'NotFoundError') throw fsError('DIRECTORY_NOT_FOUND', args.oldPath);
                 throw e;
             }
             try {
@@ -293,28 +298,36 @@ async function handleMessage(method, args) {
 
 // ── Shared helpers ──
 
-/// Resolves a file path to a File object, throwing 'File not found:' on missing.
+/// Creates a typed file system error with a code and path for structured error reporting.
+function fsError(code, path) {
+    const e = new Error(code + (path ? ': ' + path : ''));
+    e.fsCode = code;
+    e.fsPath = path || null;
+    return e;
+}
+
+/// Resolves a file path to a File object, throwing FILE_NOT_FOUND on missing.
 async function getFileObject(path) {
     const dirHandle = await getParentDir(path);
-    if (!dirHandle) throw new Error('File not found: ' + path);
+    if (!dirHandle) throw fsError('FILE_NOT_FOUND', path);
     const name = getFileName(path);
     try {
         const fileHandle = await dirHandle.getFileHandle(name);
         return await fileHandle.getFile();
     } catch (e) {
-        if (e.name === 'NotFoundError') throw new Error('File not found: ' + path);
+        if (e.name === 'NotFoundError') throw fsError('FILE_NOT_FOUND', path);
         throw e;
     }
 }
 
-/// Throws 'File already exists:' if overwrite is false and the file exists.
+/// Throws FILE_ALREADY_EXISTS if overwrite is false and the file exists.
 async function assertNotExists(dirHandle, name, path, overwrite) {
     if (overwrite !== false) return;
     try {
         await dirHandle.getFileHandle(name);
-        throw new Error('File already exists: ' + path);
+        throw fsError('FILE_ALREADY_EXISTS', path);
     } catch (e) {
-        if (e.message && e.message.startsWith('File already exists:')) throw e;
+        if (e.fsCode) throw e;
         if (e.name !== 'NotFoundError') throw e;
     }
 }

@@ -9,7 +9,8 @@
       "Bash(flutter run:*)",
       "Bash(flutter clean:*)",
       "Bash(jobs -l)",
-      "Bash(flutter build:*)"
+      "Bash(flutter build:*)",
+      "WebSearch"
     ]
   }
 }

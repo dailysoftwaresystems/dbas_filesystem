@@ -61,7 +61,10 @@ class _WorkerHandle {
     if (completer == null) return;
 
     if (data.containsKey('error') && data['error'] != null) {
-      completer.completeError(_mapWorkerError(data['error'].toString()));
+      final err = data['error'];
+      completer.completeError(
+        err is Map ? _mapWorkerError(err) : DbasFileSystemException(err.toString()),
+      );
     } else {
       completer.complete(data['result']);
     }
@@ -87,22 +90,24 @@ class _WorkerHandle {
     worker.terminate();
   }
 
-  /// Maps worker error message prefixes to typed exceptions.
-  /// Prefixes must match the Error strings thrown in dbas_filesystem_worker.js.
-  static DbasFileSystemException _mapWorkerError(String msg) {
-    if (msg.startsWith('File not found:')) {
-      return FileNotFoundException(msg.substring('File not found: '.length));
+  /// Maps structured worker error objects to typed exceptions.
+  /// Error codes must match the fsError() codes in dbas_filesystem_worker.js.
+  static DbasFileSystemException _mapWorkerError(Map<Object?, Object?> err) {
+    final code = err['code']?.toString() ?? 'UNKNOWN';
+    final path = err['path']?.toString() ?? '';
+    switch (code) {
+      case 'FILE_NOT_FOUND':
+        return FileNotFoundException(path);
+      case 'FILE_ALREADY_EXISTS':
+        return FileAlreadyExistsException(path);
+      case 'DIRECTORY_NOT_FOUND':
+        return DirectoryNotFoundException(path);
+      case 'DIRECTORY_NOT_EMPTY':
+        return DirectoryNotEmptyException(path);
+      default:
+        final msg = err['message']?.toString() ?? code;
+        return DbasFileSystemException(msg, path: path.isNotEmpty ? path : null);
     }
-    if (msg.startsWith('File already exists:')) {
-      return FileAlreadyExistsException(msg.substring('File already exists: '.length));
-    }
-    if (msg.startsWith('Directory not found:')) {
-      return DirectoryNotFoundException(msg.substring('Directory not found: '.length));
-    }
-    if (msg.startsWith('Directory is not empty:')) {
-      return DirectoryNotEmptyException(msg.substring('Directory is not empty: '.length));
-    }
-    return DbasFileSystemException(msg);
   }
 }
 

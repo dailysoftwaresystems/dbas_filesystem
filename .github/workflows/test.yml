@@ -27,8 +27,16 @@ jobs:
       run: flutter analyze
     - name: Run native tests
       run: flutter test test/dbas_filesystem_test.dart
-    - name: Run web tests
-      run: flutter test test/dbas_filesystem_web_test.dart --platform chrome
+    - name: Start ChromeDriver
+      run: chromedriver --port=4444 &
+    - name: Run web integration tests
+      working-directory: example
+      timeout-minutes: 10
+      run: |
+        flutter drive \
+          --driver=test_driver/integration_test.dart \
+          --target=integration_test/dbas_filesystem_web_test.dart \
+          -d chrome
     - name: Create Release
       if: github.event_name == 'push'
       env:

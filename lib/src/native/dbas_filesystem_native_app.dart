@@ -53,7 +53,9 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
 
   @override
   Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
-    return File(path).openRead().map((chunk) => Uint8List.fromList(chunk)).handleError((e) {
+    return File(path).openRead().map((chunk) {
+      return chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+    }).handleError((e) {
       if (e is FileSystemException) _throwIfNotFound(e, path);
       throw e;
     });
@@ -74,11 +76,15 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
 
   @override
   Future<void> copyFile(String sourcePath, String destPath) async {
+    final destFile = File(destPath);
+    final destExisted = await destFile.exists();
     try {
-      final destFile = File(destPath);
       await destFile.parent.create(recursive: true);
       await File(sourcePath).openRead().pipe(destFile.openWrite());
     } on FileSystemException catch (e) {
+      if (!destExisted && await destFile.exists()) {
+        try { await destFile.delete(); } catch (_) {}
+      }
       _throwIfNotFound(e, sourcePath);
       rethrow;
     }

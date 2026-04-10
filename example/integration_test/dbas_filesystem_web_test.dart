@@ -1,18 +1,16 @@
-@Skip('Web tests run as integration tests. See example/integration_test/')
-library;
-
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
 import 'package:dbas_filesystem/dbas_filesystem.dart';
 
-/// Web integration tests — run with: flutter test --platform chrome
 void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
   late DbasFileSystem fs;
   const testRoot = 'web_test_root';
 
   setUpAll(() async {
     fs = await DbasFileSystem.getInstance();
-    // Ensure a clean root for all tests
     if (await fs.directoryExists(testRoot)) {
       await fs.deleteDirectory(testRoot, recursive: true);
     }
@@ -20,7 +18,6 @@ void main() {
   });
 
   tearDown(() async {
-    // Clean up everything under testRoot after each test
     if (await fs.directoryExists(testRoot)) {
       await fs.deleteDirectory(testRoot, recursive: true);
     }
@@ -35,7 +32,7 @@ void main() {
 
   // ── Basic file operations ─────────────────────────────────────────────
 
-  test('writeFile and readFile round-trip', () async {
+  testWidgets('writeFile and readFile round-trip', (tester) async {
     final bytes = Uint8List.fromList([1, 2, 3, 4, 5]);
     await fs.writeFile('$testRoot/test.bin', bytes);
     final result = await fs.readFile('$testRoot/test.bin');
@@ -44,14 +41,14 @@ void main() {
     expect(result, equals(bytes));
   });
 
-  test('fileExists', () async {
+  testWidgets('fileExists', (tester) async {
     expect(await fs.fileExists('$testRoot/exists_test.bin'), isFalse);
 
     await fs.writeFile('$testRoot/exists_test.bin', Uint8List.fromList([10, 20]));
     expect(await fs.fileExists('$testRoot/exists_test.bin'), isTrue);
   });
 
-  test('deleteFile and idempotency', () async {
+  testWidgets('deleteFile and idempotency', (tester) async {
     await fs.writeFile('$testRoot/delete.bin', Uint8List.fromList([1, 2, 3]));
     expect(await fs.fileExists('$testRoot/delete.bin'), isTrue);
 
@@ -62,7 +59,7 @@ void main() {
     await fs.deleteFile('$testRoot/delete.bin');
   });
 
-  test('writeFileStream and readFile', () async {
+  testWidgets('writeFileStream and readFile', (tester) async {
     final chunks = [
       Uint8List.fromList([1, 2, 3]),
       Uint8List.fromList([4, 5, 6]),
@@ -73,7 +70,7 @@ void main() {
     expect(result, equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
   });
 
-  test('readFileStream', () async {
+  testWidgets('readFileStream', (tester) async {
     final bytes = Uint8List.fromList(List.generate(100, (i) => i % 256));
     await fs.writeFile('$testRoot/stream_read.bin', bytes);
 
@@ -88,7 +85,7 @@ void main() {
 
   // ── Overwrite protection ──────────────────────────────────────────────
 
-  test('writeFile with overwrite: false throws FileAlreadyExistsException', () async {
+  testWidgets('writeFile with overwrite: false throws FileAlreadyExistsException', (tester) async {
     await fs.writeFile('$testRoot/ow.bin', Uint8List.fromList([1, 2, 3]));
 
     await expectLater(
@@ -97,7 +94,7 @@ void main() {
     );
   });
 
-  test('writeFileStream with overwrite: false throws FileAlreadyExistsException', () async {
+  testWidgets('writeFileStream with overwrite: false throws FileAlreadyExistsException', (tester) async {
     await fs.writeFile('$testRoot/sow.bin', Uint8List.fromList([1, 2, 3]));
 
     await expectLater(
@@ -112,7 +109,7 @@ void main() {
 
   // ── Copy and Move ─────────────────────────────────────────────────────
 
-  test('copyFile', () async {
+  testWidgets('copyFile', (tester) async {
     final bytes = Uint8List.fromList([10, 20, 30]);
     await fs.writeFile('$testRoot/copy_src.bin', bytes);
     await fs.copyFile('$testRoot/copy_src.bin', '$testRoot/copy_dest.bin');
@@ -120,7 +117,7 @@ void main() {
     expect(await fs.readFile('$testRoot/copy_dest.bin'), equals(bytes));
   });
 
-  test('moveFile', () async {
+  testWidgets('moveFile', (tester) async {
     final bytes = Uint8List.fromList([10, 20, 30]);
     await fs.writeFile('$testRoot/move_src.bin', bytes);
     await fs.moveFile('$testRoot/move_src.bin', '$testRoot/move_dest.bin');
@@ -129,7 +126,7 @@ void main() {
     expect(await fs.readFile('$testRoot/move_dest.bin'), equals(bytes));
   });
 
-  test('renameFile', () async {
+  testWidgets('renameFile', (tester) async {
     final bytes = Uint8List.fromList([10, 20, 30]);
     await fs.writeFile('$testRoot/rename_old.bin', bytes);
     await fs.renameFile('$testRoot/rename_old.bin', '$testRoot/rename_new.bin');
@@ -140,21 +137,21 @@ void main() {
 
   // ── File metadata ─────────────────────────────────────────────────────
 
-  test('getFileSize', () async {
+  testWidgets('getFileSize', (tester) async {
     final bytes = Uint8List.fromList(List.generate(256, (i) => i));
     await fs.writeFile('$testRoot/size.bin', bytes);
 
     expect(await fs.getFileSize('$testRoot/size.bin'), equals(256));
   });
 
-  test('getFileSize throws FileNotFoundException', () async {
+  testWidgets('getFileSize throws FileNotFoundException', (tester) async {
     await expectLater(
       () => fs.getFileSize('$testRoot/no_such.bin'),
       throwsA(isA<FileNotFoundException>()),
     );
   });
 
-  test('getLastModified returns recent DateTime', () async {
+  testWidgets('getLastModified returns recent DateTime', (tester) async {
     final before = DateTime.now().toUtc().subtract(const Duration(seconds: 2));
     await fs.writeFile('$testRoot/modified.bin', Uint8List.fromList([1, 2, 3]));
     final after = DateTime.now().toUtc().add(const Duration(seconds: 2));
@@ -166,14 +163,14 @@ void main() {
 
   // ── Directory operations ──────────────────────────────────────────────
 
-  test('createDirectory and directoryExists', () async {
+  testWidgets('createDirectory and directoryExists', (tester) async {
     expect(await fs.directoryExists('$testRoot/nested/dir'), isFalse);
 
     await fs.createDirectory('$testRoot/nested/dir');
     expect(await fs.directoryExists('$testRoot/nested/dir'), isTrue);
   });
 
-  test('listDirectory returns normalized paths', () async {
+  testWidgets('listDirectory returns normalized paths', (tester) async {
     await fs.createDirectory('$testRoot/list_dir');
     await fs.writeFile('$testRoot/list_dir/a.bin', Uint8List.fromList([1]));
     await fs.writeFile('$testRoot/list_dir/b.bin', Uint8List.fromList([2]));
@@ -188,7 +185,7 @@ void main() {
     expect(names, equals(['a.bin', 'b.bin']));
   });
 
-  test('deleteDirectory non-recursive throws DirectoryNotEmptyException', () async {
+  testWidgets('deleteDirectory non-recursive throws DirectoryNotEmptyException', (tester) async {
     await fs.createDirectory('$testRoot/nonempty');
     await fs.writeFile('$testRoot/nonempty/file.bin', Uint8List.fromList([1]));
 
@@ -198,7 +195,7 @@ void main() {
     );
   });
 
-  test('renameDirectory', () async {
+  testWidgets('renameDirectory', (tester) async {
     await fs.createDirectory('$testRoot/rename_old');
     await fs.writeFile('$testRoot/rename_old/a.bin', Uint8List.fromList([1, 2]));
 
@@ -211,7 +208,7 @@ void main() {
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
-  test('writeFiles and readFiles (bulk)', () async {
+  testWidgets('writeFiles and readFiles (bulk)', (tester) async {
     final files = {
       '$testRoot/bulk_1.bin': Uint8List.fromList([1, 2, 3]),
       '$testRoot/bulk_2.bin': Uint8List.fromList([4, 5, 6]),
@@ -229,14 +226,14 @@ void main() {
 
   // ── Exception hierarchy ───────────────────────────────────────────────
 
-  test('readFile throws FileNotFoundException for missing file', () async {
+  testWidgets('readFile throws FileNotFoundException for missing file', (tester) async {
     await expectLater(
       () => fs.readFile('$testRoot/nonexistent.bin'),
       throwsA(isA<FileNotFoundException>()),
     );
   });
 
-  test('copyFile throws FileNotFoundException for missing source', () async {
+  testWidgets('copyFile throws FileNotFoundException for missing source', (tester) async {
     await expectLater(
       () => fs.copyFile('$testRoot/nonexistent.bin', '$testRoot/dest.bin'),
       throwsA(isA<FileNotFoundException>()),
