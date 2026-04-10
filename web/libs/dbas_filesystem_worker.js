@@ -42,6 +42,17 @@ async function handleMessage(method, args) {
         case 'writeFile': {
             const dirHandle = await ensureParentDir(args.path);
             const name = getFileName(args.path);
+            if (args.overwrite === false) {
+                try {
+                    await dirHandle.getFileHandle(name);
+                    // Error prefix must match _mapWorkerError in Dart
+                    throw new Error('File already exists: ' + args.path);
+                } catch (e) {
+                    if (e.message && e.message.startsWith('File already exists:')) throw e;
+                    if (e.name !== 'NotFoundError') throw e;
+                    // NotFoundError means file doesn't exist — proceed
+                }
+            }
             const fileHandle = await dirHandle.getFileHandle(name, { create: true });
             const writable = await fileHandle.createWritable();
             await writable.write(new Uint8Array(args.bytes));
@@ -110,9 +121,15 @@ async function handleMessage(method, args) {
 
         case 'copyFile': {
             const srcDir = await getParentDir(args.sourcePath);
-            if (!srcDir) throw new Error('Source file not found: ' + args.sourcePath);
+            if (!srcDir) throw new Error('File not found: ' + args.sourcePath);
             const srcName = getFileName(args.sourcePath);
-            const srcHandle = await srcDir.getFileHandle(srcName);
+            let srcHandle;
+            try {
+                srcHandle = await srcDir.getFileHandle(srcName);
+            } catch (e) {
+                if (e.name === 'NotFoundError') throw new Error('File not found: ' + args.sourcePath);
+                throw e;
+            }
             const srcFile = await srcHandle.getFile();
 
             const destDir = await ensureParentDir(args.destPath);
@@ -139,8 +156,17 @@ async function handleMessage(method, args) {
         }
 
         case 'moveFile': {
+            // copyFile throws 'File not found' if source is missing
             await handleMessage('copyFile', args);
             await handleMessage('deleteFile', { path: args.sourcePath });
+            return true;
+        }
+
+        case 'renameFile': {
+            // OPFS has no atomic rename. Implemented as copy+delete.
+            // copyFile throws 'File not found' if source is missing
+            await handleMessage('copyFile', { sourcePath: args.oldPath, destPath: args.newPath });
+            await handleMessage('deleteFile', { path: args.oldPath });
             return true;
         }
 
@@ -180,6 +206,36 @@ async function handleMessage(method, args) {
             return true;
         }
 
+        // ── File metadata ──
+
+        case 'getFileSize': {
+            const dirHandle = await getParentDir(args.path);
+            if (!dirHandle) throw new Error('File not found: ' + args.path);
+            const name = getFileName(args.path);
+            try {
+                const fileHandle = await dirHandle.getFileHandle(name);
+                const file = await fileHandle.getFile();
+                return file.size;
+            } catch (e) {
+                if (e.name === 'NotFoundError') throw new Error('File not found: ' + args.path);
+                throw e;
+            }
+        }
+
+        case 'getLastModified': {
+            const dirHandle = await getParentDir(args.path);
+            if (!dirHandle) throw new Error('File not found: ' + args.path);
+            const name = getFileName(args.path);
+            try {
+                const fileHandle = await dirHandle.getFileHandle(name);
+                const file = await fileHandle.getFile();
+                return file.lastModified;
+            } catch (e) {
+                if (e.name === 'NotFoundError') throw new Error('File not found: ' + args.path);
+                throw e;
+            }
+        }
+
         // ── Directory operations ──
 
         case 'createDirectory': {
@@ -198,7 +254,13 @@ async function handleMessage(method, args) {
         }
 
         case 'listDirectory': {
-            const dirHandle = await navigateToDir(args.path);
+            let dirHandle;
+            try {
+                dirHandle = await navigateToDir(args.path);
+            } catch (e) {
+                if (e.name === 'NotFoundError') throw new Error('Directory not found: ' + args.path);
+                throw e;
+            }
             const entries = [];
             for await (const [name] of dirHandle.entries()) {
                 const prefix = args.path.endsWith('/') ? args.path : args.path + '/';
@@ -223,6 +285,20 @@ async function handleMessage(method, args) {
                 }
             }
 
+            if (!args.recursive) {
+                // Check if directory is empty before deleting
+                try {
+                    const dirHandle = await parentDir.getDirectoryHandle(dirName);
+                    for await (const _ of dirHandle.entries()) {
+                        throw new Error('Directory is not empty: ' + args.path);
+                    }
+                } catch (e) {
+                    if (e.name === 'NotFoundError') return true;
+                    if (e.message && e.message.startsWith('Directory is not empty:')) throw e;
+                    throw e;
+                }
+            }
+
             try {
                 await parentDir.removeEntry(dirName, { recursive: args.recursive || false });
             } catch (e) {
@@ -231,20 +307,24 @@ async function handleMessage(method, args) {
             return true;
         }
 
-        // ── File info ──
-
-        case 'getFileSize': {
-            const dirHandle = await getParentDir(args.path);
-            if (!dirHandle) return -1;
-            const name = getFileName(args.path);
+        case 'renameDirectory': {
+            // OPFS has no atomic rename. Implemented as recursive copy+delete.
+            let srcDir;
             try {
-                const fileHandle = await dirHandle.getFileHandle(name);
-                const file = await fileHandle.getFile();
-                return file.size;
+                srcDir = await navigateToDir(args.oldPath);
             } catch (e) {
-                if (e.name === 'NotFoundError') return -1;
+                if (e.name === 'NotFoundError') throw new Error('Directory not found: ' + args.oldPath);
                 throw e;
             }
+            try {
+                await copyDirectoryRecursive(srcDir, args.newPath);
+                await handleMessage('deleteDirectory', { path: args.oldPath, recursive: true });
+            } catch (e) {
+                // Best-effort cleanup of partial destination
+                try { await handleMessage('deleteDirectory', { path: args.newPath, recursive: true }); } catch (_) {}
+                throw e;
+            }
+            return true;
         }
 
         default:
@@ -308,4 +388,33 @@ async function navigateToDir(dirPath) {
         dir = await dir.getDirectoryHandle(part);
     }
     return dir;
+}
+
+async function copyDirectoryRecursive(srcDirHandle, destPath) {
+    const destDirHandle = await ensureDir(destPath);
+    for await (const [name, handle] of srcDirHandle.entries()) {
+        const childDest = destPath.endsWith('/') ? destPath + name : destPath + '/' + name;
+        if (handle.kind === 'file') {
+            const file = await handle.getFile();
+            const destFileHandle = await destDirHandle.getFileHandle(name, { create: true });
+            const writable = await destFileHandle.createWritable();
+            const chunkSize = 65536;
+            let offset = 0;
+            try {
+                while (offset < file.size) {
+                    const end = Math.min(offset + chunkSize, file.size);
+                    const slice = file.slice(offset, end);
+                    const chunk = await slice.arrayBuffer();
+                    await writable.write(new Uint8Array(chunk));
+                    offset = end;
+                }
+                await writable.close();
+            } catch (e) {
+                try { await writable.abort(); } catch (_) {}
+                throw e;
+            }
+        } else if (handle.kind === 'directory') {
+            await copyDirectoryRecursive(handle, childDest);
+        }
+    }
 }

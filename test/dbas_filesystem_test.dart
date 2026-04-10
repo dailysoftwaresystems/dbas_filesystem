@@ -25,6 +25,8 @@ void main() {
     }
   });
 
+  // ── Basic file operations ─────────────────────────────────────────────
+
   test('writeFile and readFile', () async {
     final filePath = '$testDir/test.bin';
     final bytes = Uint8List.fromList([1, 2, 3, 4, 5]);
@@ -50,6 +52,10 @@ void main() {
 
     await fs.deleteFile(filePath);
     expect(await fs.fileExists(filePath), isFalse);
+  });
+
+  test('deleteFile on non-existent file is a no-op', () async {
+    await fs.deleteFile('$testDir/does_not_exist.bin');
   });
 
   test('writeFileStream and readFile', () async {
@@ -104,6 +110,116 @@ void main() {
     expect(await fs.readFile(destPath), equals(bytes));
   });
 
+  // ── writeFile overwrite ───────────────────────────────────────────────
+
+  test('writeFile with overwrite: true overwrites existing file', () async {
+    final filePath = '$testDir/overwrite_test.bin';
+    await fs.writeFile(filePath, [1, 2, 3]);
+    await fs.writeFile(filePath, [4, 5, 6], overwrite: true);
+
+    expect(await fs.readFile(filePath), equals([4, 5, 6]));
+  });
+
+  test('writeFile with overwrite: false throws FileAlreadyExistsException', () async {
+    final filePath = '$testDir/overwrite_false_test.bin';
+    await fs.writeFile(filePath, [1, 2, 3]);
+
+    await expectLater(
+      () => fs.writeFile(filePath, [4, 5, 6], overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+  });
+
+  test('writeFile with overwrite: false succeeds on new file', () async {
+    final filePath = '$testDir/overwrite_new.bin';
+    await fs.writeFile(filePath, [1, 2, 3], overwrite: false);
+
+    expect(await fs.readFile(filePath), equals([1, 2, 3]));
+  });
+
+  // ── File metadata ─────────────────────────────────────────────────────
+
+  test('getFileSize returns correct byte count', () async {
+    final filePath = '$testDir/size_test.bin';
+    final bytes = Uint8List.fromList(List.generate(256, (i) => i));
+    await fs.writeFile(filePath, bytes);
+
+    final size = await fs.getFileSize(filePath);
+    expect(size, equals(256));
+  });
+
+  test('getFileSize throws FileNotFoundException for missing file', () async {
+    await expectLater(
+      () => fs.getFileSize('$testDir/no_such_file.bin'),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  test('getLastModified returns recent DateTime', () async {
+    final filePath = '$testDir/modified_test.bin';
+    final before = DateTime.now().toUtc().subtract(const Duration(seconds: 2));
+    await fs.writeFile(filePath, [1, 2, 3]);
+    final after = DateTime.now().toUtc().add(const Duration(seconds: 2));
+
+    final modified = await fs.getLastModified(filePath);
+    expect(modified.isAfter(before), isTrue);
+    expect(modified.isBefore(after), isTrue);
+  });
+
+  test('getLastModified throws FileNotFoundException for missing file', () async {
+    await expectLater(
+      () => fs.getLastModified('$testDir/no_such_file.bin'),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  // ── Rename ────────────────────────────────────────────────────────────
+
+  test('renameFile moves content and removes old path', () async {
+    final oldPath = '$testDir/rename_old.bin';
+    final newPath = '$testDir/rename_new.bin';
+    final bytes = [10, 20, 30];
+
+    await fs.writeFile(oldPath, bytes);
+    await fs.renameFile(oldPath, newPath);
+
+    expect(await fs.fileExists(oldPath), isFalse);
+    expect(await fs.fileExists(newPath), isTrue);
+    expect(await fs.readFile(newPath), equals(bytes));
+  });
+
+  test('renameFile throws FileNotFoundException for missing source', () async {
+    await expectLater(
+      () => fs.renameFile('$testDir/no_such.bin', '$testDir/dest.bin'),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  test('renameDirectory moves contents and removes old path', () async {
+    final oldDir = '$testDir/rename_dir_old';
+    final newDir = '$testDir/rename_dir_new';
+
+    await fs.createDirectory(oldDir);
+    await fs.writeFile('$oldDir/a.bin', [1, 2]);
+    await fs.writeFile('$oldDir/b.bin', [3, 4]);
+
+    await fs.renameDirectory(oldDir, newDir);
+
+    expect(await fs.directoryExists(oldDir), isFalse);
+    expect(await fs.directoryExists(newDir), isTrue);
+    expect(await fs.readFile('$newDir/a.bin'), equals([1, 2]));
+    expect(await fs.readFile('$newDir/b.bin'), equals([3, 4]));
+  });
+
+  test('renameDirectory throws DirectoryNotFoundException for missing source', () async {
+    await expectLater(
+      () => fs.renameDirectory('$testDir/no_such_dir', '$testDir/dest_dir'),
+      throwsA(isA<DirectoryNotFoundException>()),
+    );
+  });
+
+  // ── Bulk operations ───────────────────────────────────────────────────
+
   test('writeFiles and readFiles (bulk)', () async {
     final files = {
       '$testDir/bulk_1.bin': <int>[1, 2, 3],
@@ -119,6 +235,38 @@ void main() {
     expect(result['$testDir/bulk_2.bin'], equals([4, 5, 6]));
     expect(result['$testDir/bulk_3.bin'], equals([7, 8, 9]));
   });
+
+  test('parallel bulk write with maxConcurrency', () async {
+    final files = <String, List<int>>{};
+    for (var i = 0; i < 20; i++) {
+      files['$testDir/parallel_$i.bin'] = List.generate(10, (j) => i + j);
+    }
+
+    await fs.writeFiles(files, maxConcurrency: 5);
+
+    for (final entry in files.entries) {
+      final content = await fs.readFile(entry.key);
+      expect(content, equals(entry.value));
+    }
+  });
+
+  test('parallel bulk read with maxConcurrency', () async {
+    final files = <String, List<int>>{};
+    for (var i = 0; i < 20; i++) {
+      final path = '$testDir/par_read_$i.bin';
+      files[path] = List.generate(10, (j) => i + j);
+      await fs.writeFile(path, files[path]!);
+    }
+
+    final result = await fs.readFiles(files.keys.toList(), maxConcurrency: 5);
+
+    expect(result.length, equals(20));
+    for (final entry in files.entries) {
+      expect(result[entry.key], equals(entry.value));
+    }
+  });
+
+  // ── Directory operations ──────────────────────────────────────────────
 
   test('createDirectory and directoryExists', () async {
     final dirPath = '$testDir/subdir/nested';
@@ -148,6 +296,53 @@ void main() {
     await fs.deleteDirectory(dirPath, recursive: true);
     expect(await fs.directoryExists(dirPath), isFalse);
   });
+
+  test('deleteDirectory non-recursive throws DirectoryNotEmptyException', () async {
+    final dirPath = '$testDir/nonempty_dir';
+    await fs.createDirectory(dirPath);
+    await fs.writeFile('$dirPath/file.bin', [1]);
+
+    await expectLater(
+      () => fs.deleteDirectory(dirPath, recursive: false),
+      throwsA(isA<DirectoryNotEmptyException>()),
+    );
+
+    // Cleanup
+    await fs.deleteDirectory(dirPath, recursive: true);
+  });
+
+  // ── Exception hierarchy ───────────────────────────────────────────────
+
+  test('readFile throws FileNotFoundException for missing file', () async {
+    await expectLater(
+      () => fs.readFile('$testDir/nonexistent.bin'),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  test('copyFile throws FileNotFoundException for missing source', () async {
+    await expectLater(
+      () => fs.copyFile('$testDir/nonexistent.bin', '$testDir/dest.bin'),
+      throwsA(isA<FileNotFoundException>()),
+    );
+  });
+
+  test('all custom exceptions implement DbasFileSystemException', () {
+    expect(const FileNotFoundException('x'), isA<DbasFileSystemException>());
+    expect(const DirectoryNotFoundException('x'), isA<DbasFileSystemException>());
+    expect(const FileAlreadyExistsException('x'), isA<DbasFileSystemException>());
+    expect(const DirectoryNotEmptyException('x'), isA<DbasFileSystemException>());
+  });
+
+  test('exception toString includes path once', () {
+    final e = const FileNotFoundException('/some/path');
+    final str = e.toString();
+    expect(str, contains('/some/path'));
+    expect(str, equals('FileNotFoundException: File not found [path: /some/path]'));
+    expect(e.path, equals('/some/path'));
+  });
+
+  // ── Singleton ─────────────────────────────────────────────────────────
 
   test('getInstance returns same instance on subsequent calls', () async {
     final fs1 = await DbasFileSystem.getInstance();

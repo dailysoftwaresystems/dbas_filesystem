@@ -1,28 +1,32 @@
 import 'dart:async';
 import 'dart:js_interop';
+import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
+import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 import 'dbas_filesystem_native_interface.dart';
 
-class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
-  web.Worker? _worker;
-  bool _initialized = false;
-
+class _WorkerHandle {
+  final web.Worker worker;
   int _nextRequestId = 0;
-  int _nextStreamId = 0;
+  bool _crashed = false;
   final Map<int, Completer<dynamic>> _pendingRequests = {};
 
-  DbasFileSystemNativeWeb();
+  int get pendingCount => _pendingRequests.length;
 
-  static void registerWith(Registrar registrar) {}
+  _WorkerHandle(this.worker) {
+    worker.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
+    worker.onerror = ((web.Event e) => _onError(e)).toJS;
+  }
 
-  // ── Worker communication ──────────────────────────────────────────────
-
-  Future<dynamic> _send(String method, [Map<String, dynamic>? args]) async {
+  Future<dynamic> send(String method, [Map<String, dynamic>? args]) {
+    if (_crashed) {
+      return Future.error(DbasFileSystemException('Worker has crashed.'));
+    }
     final id = _nextRequestId++;
     final completer = Completer<dynamic>();
     _pendingRequests[id] = completer;
-    _worker!.postMessage(<String, dynamic>{
+    worker.postMessage(<String, dynamic>{
       'id': id, 'method': method, 'args': args ?? {},
     }.jsify());
     return completer.future;
@@ -39,61 +43,110 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     if (completer == null) return;
 
     if (data.containsKey('error') && data['error'] != null) {
-      completer.completeError(Exception(data['error'].toString()));
+      completer.completeError(_mapWorkerError(data['error'].toString()));
     } else {
       completer.complete(data['result']);
     }
   }
 
   void _onError(web.Event event) {
-    final error = Exception('Worker crashed unexpectedly.');
+    _crashed = true;
+    final error = DbasFileSystemException('Worker crashed unexpectedly.');
     for (final completer in _pendingRequests.values) {
       if (!completer.isCompleted) completer.completeError(error);
     }
     _pendingRequests.clear();
-    _initialized = false;
-    _worker = null;
+    worker.terminate();
+  }
+
+  /// Maps worker error message prefixes to typed exceptions.
+  /// Prefixes must match the Error strings thrown in dbas_filesystem_worker.js.
+  static DbasFileSystemException _mapWorkerError(String msg) {
+    if (msg.startsWith('File not found:')) {
+      return FileNotFoundException(msg.substring('File not found: '.length));
+    }
+    if (msg.startsWith('File already exists:')) {
+      return FileAlreadyExistsException(msg.substring('File already exists: '.length));
+    }
+    if (msg.startsWith('Directory not found:')) {
+      return DirectoryNotFoundException(msg.substring('Directory not found: '.length));
+    }
+    if (msg.startsWith('Directory is not empty:')) {
+      return DirectoryNotEmptyException(msg.substring('Directory is not empty: '.length));
+    }
+    return DbasFileSystemException(msg);
+  }
+}
+
+class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
+  final List<_WorkerHandle> _workers = [];
+  bool _initialized = false;
+  int _nextStreamId = 0;
+
+  DbasFileSystemNativeWeb();
+
+  static void registerWith(Registrar registrar) {}
+
+  // ── Worker pool ───────────────────────────────────────────────────────
+
+  _WorkerHandle _pickWorker() {
+    final alive = _workers.where((w) => !w._crashed).toList();
+    if (alive.isEmpty) {
+      throw DbasFileSystemException('All workers have crashed. Re-initialize required.');
+    }
+    return alive.reduce((a, b) => a.pendingCount <= b.pendingCount ? a : b);
+  }
+
+  Future<dynamic> _send(String method, [Map<String, dynamic>? args]) {
+    return _pickWorker().send(method, args);
   }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────
 
   @override
-  Future<void> initialize() async {
-    if (_initialized && _worker != null) return;
+  Future<void> initialize({int workerPoolSize = 4}) async {
+    if (_initialized && _workers.isNotEmpty) return;
 
     try {
-      // Flutter serves plugin assets at assets/packages/<package_name>/<asset_path>
-      _worker = web.Worker('assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js'.toJS);
-      _worker!.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
-      _worker!.onerror = ((web.Event e) => _onError(e)).toJS;
-      await _send('initialize');
+      const workerUrl = 'assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js';
+      final initFutures = <Future<void>>[];
+      for (var i = 0; i < workerPoolSize; i++) {
+        final worker = web.Worker(workerUrl.toJS);
+        final handle = _WorkerHandle(worker);
+        _workers.add(handle);
+        initFutures.add(handle.send('initialize'));
+      }
+      await Future.wait(initFutures);
       _initialized = true;
     } catch (e) {
-      _pendingRequests.clear();
+      for (final w in _workers) {
+        w.worker.terminate();
+      }
+      _workers.clear();
       _initialized = false;
-      _worker = null;
-      throw Exception('Failed to initialize DbasFileSystemNativeWeb: $e');
+      throw DbasFileSystemException('Failed to initialize DbasFileSystemNativeWeb: $e');
     }
   }
 
   // ── Single file operations ────────────────────────────────────────────
 
   @override
-  Future<void> writeFile(String path, List<int> bytes) async {
-    await _send('writeFile', {'path': path, 'bytes': bytes});
+  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true}) async {
+    await _send('writeFile', {'path': path, 'bytes': bytes, 'overwrite': overwrite});
   }
 
   @override
   Future<void> writeFileStream(String path, Stream<List<int>> stream) async {
+    final worker = _pickWorker(); // pin for entire stream
     final streamId = _nextStreamId++;
-    await _send('beginStreamWrite', {'path': path, 'streamId': streamId});
+    await worker.send('beginStreamWrite', {'path': path, 'streamId': streamId});
     try {
       await for (final chunk in stream) {
-        await _send('streamWriteChunk', {'streamId': streamId, 'bytes': chunk});
+        await worker.send('streamWriteChunk', {'streamId': streamId, 'bytes': chunk});
       }
-      await _send('endStreamWrite', {'streamId': streamId});
+      await worker.send('endStreamWrite', {'streamId': streamId});
     } catch (e) {
-      try { await _send('abortStreamWrite', {'streamId': streamId}); } catch (_) {}
+      try { await worker.send('abortStreamWrite', {'streamId': streamId}); } catch (_) {}
       rethrow;
     }
   }
@@ -104,13 +157,14 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     if (result is Map && result['bytes'] is List) {
       return (result['bytes'] as List).cast<num>().map((e) => e.toInt()).toList();
     }
-    throw Exception('Unexpected response from worker for readFile: $path');
+    throw DbasFileSystemException('Unexpected response from worker for readFile', path: path);
   }
 
   @override
   Stream<List<int>> readFileStream(String path, {int chunkSize = 65536}) {
     late StreamController<List<int>> controller;
     bool cancelled = false;
+    final worker = _pickWorker(); // pin for entire stream
 
     controller = StreamController<List<int>>(
       onCancel: () { cancelled = true; },
@@ -118,14 +172,14 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
         try {
           int offset = 0;
           while (!cancelled) {
-            final result = await _send('readFileChunk', {
+            final result = await worker.send('readFileChunk', {
               'path': path,
               'offset': offset,
               'length': chunkSize,
             });
             if (cancelled) break;
             if (result is! Map || result['bytes'] is! List || result['totalSize'] is! num) {
-              throw Exception('Unexpected response from worker for readFileChunk: $path');
+              throw DbasFileSystemException('Unexpected response from worker for readFileChunk', path: path);
             }
             final bytes = (result['bytes'] as List).cast<num>().map((e) => e.toInt()).toList();
             if (bytes.isEmpty) break;
@@ -164,27 +218,56 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     await _send('moveFile', {'sourcePath': sourcePath, 'destPath': destPath});
   }
 
+  @override
+  Future<void> renameFile(String oldPath, String newPath) async {
+    await _send('renameFile', {'oldPath': oldPath, 'newPath': newPath});
+  }
+
+  // ── File metadata ─────────────────────────────────────────────────────
+
+  @override
+  Future<int> getFileSize(String path) async {
+    final result = await _send('getFileSize', {'path': path});
+    if (result is num) return result.toInt();
+    throw DbasFileSystemException('Unexpected response from worker for getFileSize', path: path);
+  }
+
+  @override
+  Future<DateTime> getLastModified(String path) async {
+    final result = await _send('getLastModified', {'path': path});
+    if (result is num) {
+      return DateTime.fromMillisecondsSinceEpoch(result.toInt(), isUtc: true);
+    }
+    throw DbasFileSystemException('Unexpected response from worker for getLastModified', path: path);
+  }
+
   // ── Bulk operations ───────────────────────────────────────────────────
 
   @override
-  Future<void> writeFiles(Map<String, List<int>> files) async {
-    for (final entry in files.entries) {
-      await writeFile(entry.key, entry.value);
-    }
+  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) async {
+    await ConcurrencyPool.runAll(
+      files.entries.map((e) => () => writeFile(e.key, e.value)),
+      maxConcurrency: maxConcurrency,
+    );
   }
 
   @override
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files) async {
-    for (final entry in files.entries) {
-      await writeFileStream(entry.key, entry.value);
-    }
+  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) async {
+    await ConcurrencyPool.runAll(
+      files.entries.map((e) => () => writeFileStream(e.key, e.value)),
+      maxConcurrency: maxConcurrency,
+    );
   }
 
   @override
-  Future<Map<String, List<int>>> readFiles(List<String> paths) async {
+  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
     final result = <String, List<int>>{};
-    for (final path in paths) {
-      result[path] = await readFile(path);
+    final entries = await ConcurrencyPool.runAll(
+      paths.map((p) => () async => MapEntry(p, await readFile(p))),
+      maxConcurrency: maxConcurrency,
+    );
+    for (final entry in entries) {
+      result[entry.key] = entry.value;
     }
     return result;
   }
@@ -208,11 +291,16 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     if (result is List) {
       return result.map((e) => e.toString()).toList();
     }
-    throw Exception('Unexpected response from worker for listDirectory: $path');
+    throw DbasFileSystemException('Unexpected response from worker for listDirectory', path: path);
   }
 
   @override
   Future<void> deleteDirectory(String path, {bool recursive = false}) async {
     await _send('deleteDirectory', {'path': path, 'recursive': recursive});
+  }
+
+  @override
+  Future<void> renameDirectory(String oldPath, String newPath) async {
+    await _send('renameDirectory', {'oldPath': oldPath, 'newPath': newPath});
   }
 }

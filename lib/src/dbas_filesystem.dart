@@ -12,13 +12,13 @@ class DbasFileSystem {
 
   DbasFileSystem._(this._platform);
 
-  static Future<DbasFileSystem> getInstance() async {
+  static Future<DbasFileSystem> getInstance({int workerPoolSize = 4}) async {
     if (_instance != null) return _instance!;
     if (_initCompleter != null) return _initCompleter!.future;
 
     _initCompleter = Completer<DbasFileSystem>();
     try {
-      final platform = await DbasFileSystemPlatform.getInstance();
+      final platform = await DbasFileSystemPlatform.getInstance(workerPoolSize: workerPoolSize);
       _instance = DbasFileSystem._(platform);
       _initCompleter!.complete(_instance!);
       return _instance!;
@@ -36,8 +36,8 @@ class DbasFileSystem {
 
   // ── Single file operations ────────────────────────────────────────────
 
-  Future<void> writeFile(String filePath, List<int> bytes) =>
-      _platform.writeFile(filePath, bytes);
+  Future<void> writeFile(String filePath, List<int> bytes, {bool overwrite = true}) =>
+      _platform.writeFile(filePath, bytes, overwrite: overwrite);
 
   Future<void> writeFileStream(String filePath, Stream<List<int>> stream) =>
       _platform.writeFileStream(filePath, stream);
@@ -60,16 +60,27 @@ class DbasFileSystem {
   Future<void> moveFile(String sourcePath, String destPath) =>
       _platform.moveFile(sourcePath, destPath);
 
+  Future<void> renameFile(String oldPath, String newPath) =>
+      _platform.renameFile(oldPath, newPath);
+
+  // ── File metadata ─────────────────────────────────────────────────────
+
+  Future<int> getFileSize(String filePath) =>
+      _platform.getFileSize(filePath);
+
+  Future<DateTime> getLastModified(String filePath) =>
+      _platform.getLastModified(filePath);
+
   // ── Bulk operations ───────────────────────────────────────────────────
 
-  Future<void> writeFiles(Map<String, List<int>> files) =>
-      _platform.writeFiles(files);
+  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) =>
+      _platform.writeFiles(files, maxConcurrency: maxConcurrency);
 
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files) =>
-      _platform.writeFilesStream(files);
+  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) =>
+      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency);
 
-  Future<Map<String, List<int>>> readFiles(List<String> paths) =>
-      _platform.readFiles(paths);
+  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) =>
+      _platform.readFiles(paths, maxConcurrency: maxConcurrency);
 
   // ── Directory operations ──────────────────────────────────────────────
 
@@ -84,4 +95,7 @@ class DbasFileSystem {
 
   Future<void> deleteDirectory(String dirPath, {bool recursive = false}) =>
       _platform.deleteDirectory(dirPath, recursive: recursive);
+
+  Future<void> renameDirectory(String oldPath, String newPath) =>
+      _platform.renameDirectory(oldPath, newPath);
 }

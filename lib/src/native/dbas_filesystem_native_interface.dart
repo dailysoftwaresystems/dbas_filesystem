@@ -19,9 +19,11 @@ abstract class DbasFileSystemNativeInterface {
     return DbasFileSystemNativeApp();
   }
 
-  Future<void> initialize();
+  Future<void> initialize({int workerPoolSize = 4});
 
-  Future<void> writeFile(String path, List<int> bytes);
+  // ── Single file operations ────────────────────────────────────────────
+
+  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true});
   Future<void> writeFileStream(String path, Stream<List<int>> stream);
   Future<List<int>> readFile(String path);
   Stream<List<int>> readFileStream(String path, {int chunkSize = 65536});
@@ -29,13 +31,24 @@ abstract class DbasFileSystemNativeInterface {
   Future<bool> fileExists(String path);
   Future<void> copyFile(String sourcePath, String destPath);
   Future<void> moveFile(String sourcePath, String destPath);
+  Future<void> renameFile(String oldPath, String newPath);
 
-  Future<void> writeFiles(Map<String, List<int>> files);
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files);
-  Future<Map<String, List<int>>> readFiles(List<String> paths);
+  // ── File metadata ─────────────────────────────────────────────────────
+
+  Future<int> getFileSize(String path);
+  Future<DateTime> getLastModified(String path);
+
+  // ── Bulk operations ───────────────────────────────────────────────────
+
+  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10});
+  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10});
+  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10});
+
+  // ── Directory operations ──────────────────────────────────────────────
 
   Future<void> createDirectory(String path, {bool recursive = true});
   Future<bool> directoryExists(String path);
   Future<List<String>> listDirectory(String path);
   Future<void> deleteDirectory(String path, {bool recursive = false});
+  Future<void> renameDirectory(String oldPath, String newPath);
 }
