@@ -1,3 +1,9 @@
+## 2.2.2
+
+### Fixes
+
+* **CI: web integration tests use WebDriver protocol**: Switched from `-d chrome` (dwds) to `-d web-server --browser-name=chrome` (WebDriver via ChromeDriver). Fixes `AppConnectionException` / dwds connection failures on headless CI runners. Chrome runs headless natively via `integrationDriver()` — no `xvfb-run` needed.
+
 ## 2.2.1
 
 ### Fixes

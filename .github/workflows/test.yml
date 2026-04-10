@@ -38,10 +38,11 @@ jobs:
       working-directory: example
       timeout-minutes: 10
       run: |
-        xvfb-run flutter drive \
+        flutter drive \
           --driver=test_driver/integration_test.dart \
           --target=integration_test/dbas_filesystem_web_test.dart \
-          -d chrome
+          -d web-server \
+          --browser-name=chrome
     - name: Stop ChromeDriver
       if: always()
       run: kill $CHROMEDRIVER_PID || true
