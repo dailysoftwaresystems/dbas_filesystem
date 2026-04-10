@@ -7,7 +7,9 @@
       "Bash(dart:*)",
       "Bash(flutter analyze:*)",
       "Bash(flutter run:*)",
-      "Bash(flutter clean:*)"
+      "Bash(flutter clean:*)",
+      "Bash(jobs -l)",
+      "Bash(flutter build:*)"
     ]
   }
 }

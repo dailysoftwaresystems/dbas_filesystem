@@ -1,7 +1,10 @@
 import 'dart:convert';
-import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:dbas_filesystem/dbas_filesystem.dart';
+import 'package:file_picker/file_picker.dart';
+import 'upload_download_io.dart'
+  if (dart.library.js_interop) 'upload_download_web.dart';
 
 void main() {
   runApp(const MyApp());
@@ -60,6 +63,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
   }
 
   Future<void> _refreshFiles() async {
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final entries = <_FileEntry>[];
@@ -67,17 +71,22 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
         final paths = await _fs!.listDirectory(_basePath);
         for (final path in paths) {
           final name = path.split('/').last.split('\\').last;
-          final content = await _fs!.readFile(path);
-          entries.add(_FileEntry(name: name, path: path, size: content.length));
+          int size = 0;
+          await for (final chunk in _fs!.readFileStream(path)) {
+            size += chunk.length;
+          }
+          entries.add(_FileEntry(name: name, path: path, size: size));
         }
         entries.sort((a, b) => a.name.compareTo(b.name));
       }
+      if (!mounted) return;
       setState(() {
         _files = entries;
         _loading = false;
         _error = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -231,6 +240,43 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
     await _refreshFiles();
   }
 
+  Future<void> _uploadFiles() async {
+    final result = await FilePicker.pickFiles(allowMultiple: true, withData: kIsWeb);
+    if (result == null || result.files.isEmpty) return;
+
+    int uploaded = 0;
+    for (final file in result.files) {
+      final destPath = await _fs!.getAppFilePath(file.name);
+      final success = await uploadFile(file, destPath, _fs!);
+      if (success) uploaded++;
+    }
+
+    if (!mounted) return;
+    await _refreshFiles();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Uploaded $uploaded file(s)')),
+    );
+  }
+
+  Future<void> _downloadFile(_FileEntry entry) async {
+    try {
+      final content = await _fs!.readFile(entry.path);
+      final success = await downloadFile(entry.name, Uint8List.fromList(content));
+      if (!mounted) return;
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Downloaded ${entry.name}')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Download failed: $e')),
+      );
+    }
+  }
+
   Future<void> _readFile(_FileEntry entry) async {
     final content = await _fs!.readFile(entry.path);
 
@@ -248,6 +294,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
       }
     }
 
+    if (!mounted) return;
     setState(() {
       _previewContent = preview;
       _previewName = entry.name;
@@ -263,6 +310,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
       chunkCount++;
     }
 
+    if (!mounted) return;
     setState(() {
       _previewContent = 'Stream read complete:\n'
           '  Chunks: $chunkCount\n'
@@ -341,7 +389,13 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
         title: const Text('DbasFileSystem Example'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.upload_file),
+            tooltip: 'Upload files',
+            onPressed: _fs != null ? _uploadFiles : null,
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
+            tooltip: 'Refresh',
             onPressed: _fs != null ? _refreshFiles : null,
           ),
         ],
@@ -409,24 +463,20 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
                       title: Text(entry.name),
                       subtitle: Text(_formatSize(entry.size)),
                       selected: isSelected,
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.stream, size: 20),
-                            tooltip: 'Stream read',
-                            onPressed: () => _readFileStream(entry),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.copy, size: 20),
-                            tooltip: 'Copy',
-                            onPressed: () => _copyFile(entry),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, size: 20),
-                            tooltip: 'Delete',
-                            onPressed: () => _deleteFile(entry),
-                          ),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (action) {
+                          switch (action) {
+                            case 'download': _downloadFile(entry);
+                            case 'stream': _readFileStream(entry);
+                            case 'copy': _copyFile(entry);
+                            case 'delete': _deleteFile(entry);
+                          }
+                        },
+                        itemBuilder: (ctx) => [
+                          const PopupMenuItem(value: 'download', child: ListTile(leading: Icon(Icons.download), title: Text('Download'))),
+                          const PopupMenuItem(value: 'stream', child: ListTile(leading: Icon(Icons.stream), title: Text('Stream Read'))),
+                          const PopupMenuItem(value: 'copy', child: ListTile(leading: Icon(Icons.copy), title: Text('Copy'))),
+                          const PopupMenuItem(value: 'delete', child: ListTile(leading: Icon(Icons.delete), title: Text('Delete'))),
                         ],
                       ),
                       onTap: () => _readFile(entry),

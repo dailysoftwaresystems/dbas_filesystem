@@ -62,7 +62,8 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     if (_initialized && _worker != null) return;
 
     try {
-      _worker = web.Worker('libs/dbas_filesystem_worker.js'.toJS);
+      // Flutter serves plugin assets at assets/packages/<package_name>/<asset_path>
+      _worker = web.Worker('assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js'.toJS);
       _worker!.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
       _worker!.onerror = ((web.Event e) => _onError(e)).toJS;
       await _send('initialize');
