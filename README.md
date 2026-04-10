@@ -4,20 +4,22 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 
 ## Features
 
-- **File operations** &mdash; read, write, copy, move, rename, delete, and existence check.
+- **File operations** &mdash; read, write, append, copy, move, rename, delete, and existence check.
 - **File metadata** &mdash; get file size and last modified timestamp.
 - **Overwrite protection** &mdash; `writeFile`, `writeFileStream`, `copyFile`, `moveFile`, and `renameFile` accept an `overwrite` parameter to prevent accidental overwrites.
+- **Append support** &mdash; `appendFile` and `appendFileStream` append bytes to existing files (or create them if missing).
 - **Stream support** &mdash; stream-based read and write for memory-efficient large file handling.
 - **Parallel bulk operations** &mdash; read or write multiple files concurrently with configurable `maxConcurrency`.
-- **Directory operations** &mdash; create, list (with optional recursive traversal), delete, rename, and existence check.
+- **Directory operations** &mdash; create, list (with typed entries), copy, delete, rename, and existence check.
 - **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices. Partial destination is cleaned up on failure.
 - **Thread safety** &mdash; per-path locking for both files and directories. Concurrent operations on the same path are serialized; different paths proceed in parallel.
 - **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`.
-- **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web.
+- **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web, with automatic restart on crash (exponential backoff).
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
-- **Side-effect free path resolution** &mdash; `getAppFilePath` resolves paths without creating directories. Write operations create parent directories automatically.
-- **Lifecycle management** &mdash; `dispose()` releases all resources (terminates web workers, resets singleton).
+- **Side-effect free path resolution** &mdash; `getAppFilePath` resolves a platform path without creating directories or accessing the file system. This asymmetry is intentional: path resolution is a pure computation, while directory creation is a side effect reserved for operations that actually write data.
+- **Lifecycle management** &mdash; `dispose()` gives in-flight operations up to 30 seconds to finish, then forces teardown. `isDisposed` reflects whether an instance has been disposed.
+- **Cancellation listeners** &mdash; `CancellationToken` supports `addListener` / `removeListener` for reactive cancellation in long-running operations.
 
 ## Platform Support
 
@@ -29,6 +31,13 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 | Linux    | `dart:io`     |
 | Windows  | `dart:io`     |
 | Web      | OPFS via Web Worker pool |
+
+Web storage uses the [Origin Private File System (OPFS)](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
+exclusively. There is no fallback to IndexedDB, LocalStorage, or Cache API.
+OPFS is the modern browser standard for persistent, origin-scoped binary file
+storage with byte-level random access and true background-thread I/O.
+Applications targeting older browsers should catch the `DbasFileSystemException`
+thrown by `getInstance()` and display an appropriate upgrade notice.
 
 ## Getting Started
 
@@ -66,6 +75,20 @@ await fs.writeFile(path, Uint8List.fromList(utf8.encode('data')), overwrite: fal
 // Read (returns Uint8List)
 final bytes = await fs.readFile(path);
 print(utf8.decode(bytes));
+```
+
+> **Note**: `getAppFilePath` only resolves a path — it does not create
+> directories. Parent directories are created automatically when you call
+> `writeFile`, `writeFileStream`, or `appendFile`.
+
+### Append to a file
+
+```dart
+// Append bytes (creates file if it doesn't exist)
+await fs.appendFile(path, Uint8List.fromList(utf8.encode('more data')));
+
+// Append from a stream
+await fs.appendFileStream(path, myStream);
 ```
 
 ### File metadata
@@ -133,8 +156,19 @@ await fs.renameFile(oldPath, newPath, overwrite: false);
 
 ```dart
 await fs.createDirectory(dirPath);
-final entries = await fs.listDirectory(dirPath);                    // direct children only
+
+// List returns typed entries with path and type (file or directory)
+final entries = await fs.listDirectory(dirPath);
+for (final entry in entries) {
+  print('${entry.path} is a ${entry.type}'); // FileSystemEntityType.file or .directory
+}
+
 final allEntries = await fs.listDirectory(dirPath, recursive: true); // entire tree
+
+// Copy a directory (merge — overwrites conflicting files, keeps non-conflicting ones)
+await fs.copyDirectory(sourceDirPath, destDirPath);
+await fs.copyDirectory(sourceDirPath, destDirPath, overwrite: false); // throws on conflict
+
 await fs.deleteDirectory(dirPath, recursive: true);
 ```
 
@@ -211,11 +245,14 @@ if (!fs.isPersistentStorage) {
 | Method | Description |
 |--------|-------------|
 | `getInstance({workerPoolSize})` | Returns the singleton `DbasFileSystem` instance. |
-| `dispose()` | Releases all resources and resets the singleton. |
+| `dispose()` | Releases all resources. Gives in-flight operations up to 30 seconds to finish, then forces teardown. |
+| `isDisposed` | `true` after `dispose()` has been called. Subsequent operations throw `StateError`. |
 | `isPersistentStorage` | Whether storage is persistent (always `true` on native; reflects browser grant on web). |
 | `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). Does not create directories. |
 | `writeFile(path, bytes, {overwrite})` | Writes a `Uint8List` to a file. |
 | `writeFileStream(path, stream, {overwrite})` | Writes a stream of byte chunks to a file. |
+| `appendFile(path, bytes)` | Appends bytes to a file (creates it if missing). |
+| `appendFileStream(path, stream)` | Appends a stream of byte chunks to a file (creates it if missing). |
 | `readFile(path)` | Reads a file as a `Uint8List`. |
 | `readFileStream(path, {chunkSize})` | Reads a file as a `Stream<Uint8List>`. |
 | `deleteFile(path)` | Deletes a file (no-op if missing). |
@@ -230,9 +267,10 @@ if (!fs.isPersistentStorage) {
 | `readFiles(paths, {maxConcurrency, cancellationToken, onError})` | Reads multiple files concurrently (not atomic). With `onError`, failed files are omitted from the result. |
 | `createDirectory(path, {recursive})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
-| `listDirectory(path, {recursive})` | Lists entries in a directory (forward-slash paths). With `recursive: true`, includes all nested entries. |
+| `listDirectory(path, {recursive})` | Lists typed entries (`FileSystemEntry` with `path` and `type`). With `recursive: true`, includes all nested entries. |
 | `deleteDirectory(path, {recursive})` | Deletes a directory. |
 | `renameDirectory(oldPath, newPath)` | Renames a directory (atomic on native, recursive copy+delete on web). |
+| `copyDirectory(source, dest, {overwrite})` | Copies a directory (merge: overwrites conflicting files, leaves non-conflicting ones). |
 
 ## Thread Safety
 
@@ -307,9 +345,13 @@ Your app should handle this gracefully — check `isPersistentStorage` after ini
 
 ### Web: Worker crashes
 
-If all workers crash, operations throw `DbasFileSystemException` with message "All workers have crashed". Call `dispose()` and re-initialize with `getInstance()`. Common causes:
+Workers automatically restart on crash with exponential backoff (first 3 retries are immediate, then 1s, 2s, 4s... up to 60s, max 5 retries per worker slot). If all workers permanently fail, operations throw `DbasFileSystemException`. Call `dispose()` and re-initialize with `getInstance()`. Common causes:
 - Browser memory pressure killing Web Workers
 - OPFS quota exceeded
+
+### Web: No IndexedDB or LocalStorage fallback
+
+`dbas_filesystem` intentionally does not fall back to IndexedDB or LocalStorage when OPFS is unavailable. OPFS is the only storage API that supports the binary, streaming, and parallel I/O semantics this library provides. If OPFS is unavailable, `getInstance()` throws `DbasFileSystemException` — catch it and guide the user to a supported browser.
 
 ### Native: Cross-device move fails
 

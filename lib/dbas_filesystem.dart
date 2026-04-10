@@ -1,4 +1,6 @@
 export 'src/dbas_filesystem.dart' show DbasFileSystem;
+export 'src/dbas_filesystem_entry.dart'
+    show FileSystemEntry, FileSystemEntityType;
 export 'src/dbas_filesystem_exceptions.dart'
     show
         DbasFileSystemException,

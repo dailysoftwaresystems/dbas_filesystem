@@ -13,7 +13,9 @@
       "WebSearch",
       "Bash(find \"C:\\\\Source\\\\DailySoftware\\\\DBAS.FileSystem.Dart/lib\" -name \"*.dart\" -exec wc -l {} +)",
       "Bash(chromedriver:*)",
-      "Bash(flutter drive:*)"
+      "Bash(flutter drive:*)",
+      "Bash(awk '{print $NF}')",
+      "Bash(xargs cat:*)"
     ]
   }
 }

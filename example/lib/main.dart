@@ -68,14 +68,14 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
     try {
       final entries = <_FileEntry>[];
       if (await _fs!.directoryExists(_basePath)) {
-        final paths = await _fs!.listDirectory(_basePath);
-        for (final path in paths) {
-          final name = path.split('/').last;
+        final listed = await _fs!.listDirectory(_basePath);
+        for (final entry in listed) {
+          final name = entry.path.split('/').last;
           int size = 0;
-          await for (final chunk in _fs!.readFileStream(path)) {
+          await for (final chunk in _fs!.readFileStream(entry.path)) {
             size += chunk.length;
           }
-          entries.add(_FileEntry(name: name, path: path, size: size));
+          entries.add(_FileEntry(name: name, path: entry.path, size: size));
         }
         entries.sort((a, b) => a.name.compareTo(b.name));
       }

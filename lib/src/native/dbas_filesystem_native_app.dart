@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
 import 'dbas_filesystem_native_interface.dart';
 
@@ -23,8 +24,13 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     if (!overwrite && await file.exists()) {
       throw FileAlreadyExistsException(path);
     }
-    await file.parent.create(recursive: true);
-    await file.writeAsBytes(bytes);
+    try {
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes);
+    } on FileSystemException catch (e) {
+      _throwMapped(e, path);
+      rethrow;
+    }
   }
 
   @override
@@ -33,15 +39,58 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     if (!overwrite && await file.exists()) {
       throw FileAlreadyExistsException(path);
     }
-    await file.parent.create(recursive: true);
-    final sink = file.openWrite();
     try {
-      await for (final chunk in stream) {
-        sink.add(chunk);
+      await file.parent.create(recursive: true);
+      final sink = file.openWrite();
+      try {
+        await for (final chunk in stream) {
+          sink.add(chunk);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
       }
-      await sink.flush();
-    } finally {
-      await sink.close();
+    } on FileSystemException catch (e) {
+      _throwMapped(e, path);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> appendFile(String path, Uint8List bytes) async {
+    try {
+      final file = File(path);
+      await file.parent.create(recursive: true);
+      final sink = file.openWrite(mode: FileMode.append);
+      try {
+        sink.add(bytes);
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    } on FileSystemException catch (e) {
+      _throwMapped(e, path);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> appendFileStream(String path, Stream<List<int>> stream) async {
+    try {
+      final file = File(path);
+      await file.parent.create(recursive: true);
+      final sink = file.openWrite(mode: FileMode.append);
+      try {
+        await for (final chunk in stream) {
+          sink.add(chunk);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+    } on FileSystemException catch (e) {
+      _throwMapped(e, path);
+      rethrow;
     }
   }
 
@@ -50,7 +99,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     try {
       return await File(path).readAsBytes();
     } on FileSystemException catch (e) {
-      _throwIfNotFound(e, path);
+      _throwMapped(e, path);
       rethrow;
     }
   }
@@ -78,7 +127,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
           try {
             raf = await File(path).open();
           } on FileSystemException catch (e) {
-            _throwIfNotFound(e, path);
+            _throwMapped(e, path);
             rethrow;
           }
           while (!cancelled) {
@@ -131,7 +180,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
       await writer.flush();
       succeeded = true;
     } on FileSystemException catch (e) {
-      _throwIfNotFound(e, sourcePath);
+      _throwMapped(e, sourcePath);
       rethrow;
     } finally {
       try { await writer.close(); } catch (_) {}
@@ -168,14 +217,12 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
         try {
           await source.delete();
         } catch (_) {
-          // Source delete failed — roll back destination to avoid duplicates
-          if (await dest.exists()) {
-            try { await dest.delete(); } catch (_) {}
-          }
+          // Source delete failed — keep the destination (copy succeeded,
+          // data is intact) and propagate the error. Matches web behaviour.
           rethrow;
         }
       } else {
-        _throwIfNotFound(e, sourcePath);
+        _throwMapped(e, sourcePath);
         rethrow;
       }
     }
@@ -191,7 +238,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
       await dest.parent.create(recursive: true);
       await File(oldPath).rename(newPath);
     } on FileSystemException catch (e) {
-      _throwIfNotFound(e, oldPath);
+      _throwMapped(e, oldPath);
       rethrow;
     }
   }
@@ -203,7 +250,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     try {
       return await File(path).length();
     } on FileSystemException catch (e) {
-      _throwIfNotFound(e, path);
+      _throwMapped(e, path);
       rethrow;
     }
   }
@@ -213,7 +260,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     try {
       return (await File(path).lastModified()).toUtc();
     } on FileSystemException catch (e) {
-      _throwIfNotFound(e, path);
+      _throwMapped(e, path);
       rethrow;
     }
   }
@@ -222,7 +269,12 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
 
   @override
   Future<void> createDirectory(String path, {bool recursive = true}) async {
-    await Directory(path).create(recursive: recursive);
+    try {
+      await Directory(path).create(recursive: recursive);
+    } on FileSystemException catch (e) {
+      _throwMapped(e, path, isDirectory: true);
+      rethrow;
+    }
   }
 
   @override
@@ -231,12 +283,16 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<String>> listDirectory(String path, {bool recursive = false}) async {
+  Future<List<FileSystemEntry>> listDirectory(String path, {bool recursive = false}) async {
     try {
       final entities = await Directory(path).list(recursive: recursive).toList();
-      return entities.map((e) => e.path.replaceAll('\\', '/')).toList();
+      return entities.map((e) {
+        final normalized = e.path.replaceAll('\\', '/');
+        final type = e is File ? FileSystemEntityType.file : FileSystemEntityType.directory;
+        return FileSystemEntry(path: normalized, type: type);
+      }).toList();
     } on FileSystemException catch (e) {
-      _throwIfDirNotFound(e, path);
+      _throwMapped(e, path, isDirectory: true);
       rethrow;
     }
   }
@@ -263,25 +319,77 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     try {
       await Directory(oldPath).rename(newPath);
     } on FileSystemException catch (e) {
-      _throwIfDirNotFound(e, oldPath);
+      _throwMapped(e, oldPath, isDirectory: true);
       rethrow;
+    }
+  }
+
+  @override
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) async {
+    final source = Directory(sourcePath);
+    if (!await source.exists()) {
+      throw DirectoryNotFoundException(sourcePath);
+    }
+    await Directory(destPath).create(recursive: true);
+    var sourcePrefix = sourcePath.replaceAll('\\', '/');
+    if (!sourcePrefix.endsWith('/')) sourcePrefix = '$sourcePrefix/';
+    await for (final entity in source.list(recursive: true)) {
+      final normalizedEntity = entity.path.replaceAll('\\', '/');
+      final relative = normalizedEntity.substring(sourcePrefix.length);
+      final normalizedDest = destPath.replaceAll('\\', '/');
+      final targetPath = normalizedDest.endsWith('/') ? '$normalizedDest$relative' : '$normalizedDest/$relative';
+      if (entity is Directory) {
+        await Directory(targetPath).create(recursive: true);
+      } else if (entity is File) {
+        final targetFile = File(targetPath);
+        if (!overwrite && await targetFile.exists()) {
+          throw FileAlreadyExistsException(targetPath);
+        }
+        await targetFile.parent.create(recursive: true);
+        await entity.copy(targetPath);
+      }
     }
   }
 
   // ── Error mapping ─────────────────────────────────────────────────────
 
-  static void _throwIfNotFound(FileSystemException e, String path) {
+  /// Maps a [FileSystemException] to a typed [DbasFileSystemException] if a
+  /// known OS error code is present. Returns `null` for unrecognised codes.
+  ///
+  /// When [isDirectory] is `true`, missing-path codes map to
+  /// [DirectoryNotFoundException]; when `false`, to [FileNotFoundException].
+  static DbasFileSystemException? handleError(
+    FileSystemException e,
+    String path, {
+    bool isDirectory = false,
+  }) {
     final code = e.osError?.errorCode;
-    // ENOENT = 2 (Linux/macOS/Windows)
-    if (code == 2) throw FileNotFoundException(path);
-    // EPERM = 1 (Linux/macOS), EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
-    if (code == 1 || code == 13 || code == 5) throw PermissionDeniedException(path);
+    switch (code) {
+      // ENOENT = 2 (Linux/macOS/Windows)
+      case 2:
+        return isDirectory ? DirectoryNotFoundException(path) : FileNotFoundException(path);
+      // ERROR_PATH_NOT_FOUND = 3 (Windows) — always a missing directory component
+      case 3:
+        return DirectoryNotFoundException(path);
+      // ENOTDIR = 20 (Linux/macOS) — a path component is not a directory
+      case 20:
+      // EISDIR = 21 (Linux/macOS) — expected file, got directory (or vice versa)
+      case 21:
+        return isDirectory ? DirectoryNotFoundException(path) : FileNotFoundException(path);
+      // EPERM = 1 (Linux/macOS)
+      case 1:
+      // ERROR_ACCESS_DENIED = 5 (Windows)
+      case 5:
+      // EACCES = 13 (Linux/macOS)
+      case 13:
+        return PermissionDeniedException(path);
+      default:
+        return null;
+    }
   }
 
-  static void _throwIfDirNotFound(FileSystemException e, String path) {
-    final code = e.osError?.errorCode;
-    if (code == 2) throw DirectoryNotFoundException(path);
-    // EPERM = 1 (Linux/macOS), EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
-    if (code == 1 || code == 13 || code == 5) throw PermissionDeniedException(path);
+  static void _throwMapped(FileSystemException e, String path, {bool isDirectory = false}) {
+    final mapped = handleError(e, path, isDirectory: isDirectory);
+    if (mapped != null) throw mapped;
   }
 }

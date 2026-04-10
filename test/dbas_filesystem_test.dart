@@ -112,7 +112,6 @@ void main() {
       () => fs.copyFile(sourcePath, destPath, overwrite: false),
       throwsA(isA<FileAlreadyExistsException>()),
     );
-    // Original destination content should be unchanged
     expect(await fs.readFile(destPath), equals(Uint8List.fromList([4, 5, 6])));
   });
 
@@ -149,7 +148,6 @@ void main() {
       () => fs.moveFile(sourcePath, destPath, overwrite: false),
       throwsA(isA<FileAlreadyExistsException>()),
     );
-    // Source should still exist, destination unchanged
     expect(await fs.fileExists(sourcePath), isTrue);
     expect(await fs.readFile(destPath), equals(Uint8List.fromList([4, 5, 6])));
   });
@@ -220,6 +218,75 @@ void main() {
     expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3])));
   });
 
+  // ── appendFile / appendFileStream ─────────────────────────────────────
+
+  test('appendFile creates file when it does not exist', () async {
+    final filePath = '$testDir/append_new.bin';
+    await fs.appendFile(filePath, Uint8List.fromList([1, 2, 3]));
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3])));
+  });
+
+  test('appendFile appends to existing file', () async {
+    final filePath = '$testDir/append_existing.bin';
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
+    await fs.appendFile(filePath, Uint8List.fromList([4, 5, 6]));
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
+  });
+
+  test('appendFile creates parent directories', () async {
+    final filePath = '$testDir/append_nested/sub/file.bin';
+    await fs.appendFile(filePath, Uint8List.fromList([10, 20]));
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([10, 20])));
+  });
+
+  test('appendFileStream creates file when it does not exist', () async {
+    final filePath = '$testDir/append_stream_new.bin';
+    await fs.appendFileStream(
+      filePath,
+      Stream.fromIterable([Uint8List.fromList([1, 2, 3])]),
+    );
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3])));
+  });
+
+  test('appendFileStream appends to existing file', () async {
+    final filePath = '$testDir/append_stream_existing.bin';
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
+    await fs.appendFileStream(
+      filePath,
+      Stream.fromIterable([Uint8List.fromList([4, 5, 6])]),
+    );
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
+  });
+
+  test('appendFile serializes on same path', () async {
+    final filePath = '$testDir/append_serial.bin';
+    await fs.writeFile(filePath, Uint8List(0));
+
+    final gate = Completer<void>();
+    var streamCompleted = false;
+
+    final f1 = fs.appendFileStream(
+      filePath,
+      () async* {
+        await gate.future;
+        yield Uint8List.fromList([1, 2, 3]);
+      }(),
+    ).then((_) => streamCompleted = true);
+
+    final f2 = fs.readFile(filePath).then((bytes) {
+      expect(streamCompleted, isTrue);
+      return bytes;
+    });
+
+    gate.complete();
+    await Future.wait([f1, f2]);
+  });
+
   // ── File metadata ─────────────────────────────────────────────────────
 
   test('getFileSize returns correct byte count', () async {
@@ -288,7 +355,6 @@ void main() {
       () => fs.renameFile(oldPath, newPath, overwrite: false),
       throwsA(isA<FileAlreadyExistsException>()),
     );
-    // Source should still exist, destination unchanged
     expect(await fs.fileExists(oldPath), isTrue);
     expect(await fs.readFile(newPath), equals(Uint8List.fromList([4, 5, 6])));
   });
@@ -377,7 +443,7 @@ void main() {
     expect(await fs.directoryExists(dirPath), isTrue);
   });
 
-  test('listDirectory returns normalized forward-slash paths', () async {
+  test('listDirectory returns FileSystemEntry with correct types', () async {
     final dirPath = '$testDir/list_test';
     await fs.createDirectory(dirPath);
     await fs.writeFile('$dirPath/a.bin', Uint8List.fromList([1]));
@@ -385,16 +451,19 @@ void main() {
 
     final entries = await fs.listDirectory(dirPath);
 
-    // All paths should use forward slashes
     for (final entry in entries) {
-      expect(entry.contains('\\'), isFalse, reason: 'Path should be normalized: $entry');
+      expect(entry.path.contains('\\'), isFalse, reason: 'Path should be normalized: ${entry.path}');
     }
 
-    final names = entries.map((e) => e.split('/').last).toList()..sort();
+    final names = entries.map((e) => e.path.split('/').last).toList()..sort();
     expect(names, equals(['a.bin', 'b.bin']));
+
+    for (final entry in entries) {
+      expect(entry.type, equals(FileSystemEntityType.file));
+    }
   });
 
-  test('listDirectory with recursive: true returns all nested entries', () async {
+  test('listDirectory with recursive: true returns all nested entries with types', () async {
     final dirPath = '$testDir/list_recursive';
     await fs.createDirectory('$dirPath/sub1');
     await fs.createDirectory('$dirPath/sub2');
@@ -403,13 +472,19 @@ void main() {
     await fs.writeFile('$dirPath/sub2/c.bin', Uint8List.fromList([3]));
 
     final entries = await fs.listDirectory(dirPath, recursive: true);
-    final names = entries.map((e) => e.split('/').last).toList()..sort();
+    final names = entries.map((e) => e.path.split('/').last).toList()..sort();
 
-    // Should include the directories and all nested files
     expect(names, containsAll(['a.bin', 'b.bin', 'c.bin', 'sub1', 'sub2']));
+
+    // Verify types
+    final dirEntries = entries.where((e) => e.type == FileSystemEntityType.directory).toList();
+    final fileEntries = entries.where((e) => e.type == FileSystemEntityType.file).toList();
+    expect(dirEntries.length, equals(2));
+    expect(fileEntries.length, equals(3));
+
     // Non-recursive should only return direct children
     final shallow = await fs.listDirectory(dirPath);
-    final shallowNames = shallow.map((e) => e.split('/').last).toList()..sort();
+    final shallowNames = shallow.map((e) => e.path.split('/').last).toList()..sort();
     expect(shallowNames, equals(['a.bin', 'sub1', 'sub2']));
 
     await fs.deleteDirectory(dirPath, recursive: true);
@@ -434,8 +509,84 @@ void main() {
       throwsA(isA<DirectoryNotEmptyException>()),
     );
 
-    // Cleanup
     await fs.deleteDirectory(dirPath, recursive: true);
+  });
+
+  // ── copyDirectory ─────────────────────────────────────────────────────
+
+  test('copyDirectory copies all files preserving structure', () async {
+    final srcDir = '$testDir/copydir_src';
+    final destDir = '$testDir/copydir_dest';
+    await fs.createDirectory('$srcDir/sub');
+    await fs.writeFile('$srcDir/a.bin', Uint8List.fromList([1, 2]));
+    await fs.writeFile('$srcDir/sub/b.bin', Uint8List.fromList([3, 4]));
+
+    await fs.copyDirectory(srcDir, destDir);
+
+    expect(await fs.readFile('$destDir/a.bin'), equals(Uint8List.fromList([1, 2])));
+    expect(await fs.readFile('$destDir/sub/b.bin'), equals(Uint8List.fromList([3, 4])));
+    // Source should still exist
+    expect(await fs.directoryExists(srcDir), isTrue);
+
+    await fs.deleteDirectory(srcDir, recursive: true);
+    await fs.deleteDirectory(destDir, recursive: true);
+  });
+
+  test('copyDirectory is a merge — preserves non-conflicting dest files', () async {
+    final srcDir = '$testDir/copydir_merge_src';
+    final destDir = '$testDir/copydir_merge_dest';
+    await fs.createDirectory(srcDir);
+    await fs.createDirectory(destDir);
+    await fs.writeFile('$srcDir/new.bin', Uint8List.fromList([1]));
+    await fs.writeFile('$destDir/existing.bin', Uint8List.fromList([2]));
+
+    await fs.copyDirectory(srcDir, destDir);
+
+    expect(await fs.readFile('$destDir/new.bin'), equals(Uint8List.fromList([1])));
+    expect(await fs.readFile('$destDir/existing.bin'), equals(Uint8List.fromList([2])));
+
+    await fs.deleteDirectory(srcDir, recursive: true);
+    await fs.deleteDirectory(destDir, recursive: true);
+  });
+
+  test('copyDirectory with overwrite: true replaces conflicting files', () async {
+    final srcDir = '$testDir/copydir_ow_src';
+    final destDir = '$testDir/copydir_ow_dest';
+    await fs.createDirectory(srcDir);
+    await fs.createDirectory(destDir);
+    await fs.writeFile('$srcDir/file.bin', Uint8List.fromList([10, 20]));
+    await fs.writeFile('$destDir/file.bin', Uint8List.fromList([30, 40]));
+
+    await fs.copyDirectory(srcDir, destDir, overwrite: true);
+
+    expect(await fs.readFile('$destDir/file.bin'), equals(Uint8List.fromList([10, 20])));
+
+    await fs.deleteDirectory(srcDir, recursive: true);
+    await fs.deleteDirectory(destDir, recursive: true);
+  });
+
+  test('copyDirectory with overwrite: false throws on conflict', () async {
+    final srcDir = '$testDir/copydir_noow_src';
+    final destDir = '$testDir/copydir_noow_dest';
+    await fs.createDirectory(srcDir);
+    await fs.createDirectory(destDir);
+    await fs.writeFile('$srcDir/file.bin', Uint8List.fromList([1]));
+    await fs.writeFile('$destDir/file.bin', Uint8List.fromList([2]));
+
+    await expectLater(
+      () => fs.copyDirectory(srcDir, destDir, overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+
+    await fs.deleteDirectory(srcDir, recursive: true);
+    await fs.deleteDirectory(destDir, recursive: true);
+  });
+
+  test('copyDirectory throws DirectoryNotFoundException for missing source', () async {
+    await expectLater(
+      () => fs.copyDirectory('$testDir/no_such_dir', '$testDir/copydir_dest2'),
+      throwsA(isA<DirectoryNotFoundException>()),
+    );
   });
 
   // ── Exception hierarchy ───────────────────────────────────────────────
@@ -506,7 +657,6 @@ void main() {
     final gate = Completer<void>();
     var writeCompleted = false;
 
-    // Start a write that blocks on a gate
     final f1 = fs.writeFileStream(
       filePath,
       () async* {
@@ -515,14 +665,11 @@ void main() {
       }(),
     ).then((_) => writeCompleted = true);
 
-    // Start a read on the same path — must wait for write to finish
     final f2 = fs.readFile(filePath).then((bytes) {
-      // When the read starts, the write must have already completed
       expect(writeCompleted, isTrue);
       return bytes;
     });
 
-    // Release the gate so the write can proceed
     gate.complete();
     await Future.wait([f1, f2]);
   });
@@ -547,8 +694,6 @@ void main() {
       yield Uint8List.fromList([2]);
     }());
 
-    // Both generators should start since they're on different paths.
-    // If they were serialized, bStarted would never complete (blocked behind gate).
     await aStarted.future.timeout(const Duration(seconds: 2));
     await bStarted.future.timeout(const Duration(seconds: 2));
 
@@ -557,6 +702,19 @@ void main() {
   });
 
   // ── Disposal lifecycle ────────────────────────────────────────────────
+
+  test('isDisposed is false before dispose', () async {
+    expect(fs.isDisposed, isFalse);
+  });
+
+  test('isDisposed is true immediately after dispose is called', () async {
+    final old = await DbasFileSystem.getInstance();
+    final disposeFuture = old.dispose();
+    expect(old.isDisposed, isTrue);
+    await disposeFuture;
+
+    fs = await DbasFileSystem.getInstance();
+  });
 
   test('operations after dispose throw StateError', () async {
     final fs1 = await DbasFileSystem.getInstance();
@@ -567,7 +725,6 @@ void main() {
       throwsA(isA<StateError>()),
     );
 
-    // Re-create for subsequent tests
     fs = await DbasFileSystem.getInstance();
   });
 
@@ -578,8 +735,22 @@ void main() {
 
     expect(identical(fs1, fs2), isFalse);
 
-    // Restore fs for tearDownAll
     fs = fs2;
+  });
+
+  test('isDisposed check on multiple public methods', () async {
+    final old = await DbasFileSystem.getInstance();
+    await old.dispose();
+
+    expect(() => old.readFile('any.bin'), throwsA(isA<StateError>()));
+    expect(() => old.fileExists('any.bin'), throwsA(isA<StateError>()));
+    expect(() => old.isPersistentStorage, throwsA(isA<StateError>()));
+    expect(() => old.getAppFilePath('any.bin'), throwsA(isA<StateError>()));
+    expect(() => old.appendFile('any.bin', Uint8List(0)), throwsA(isA<StateError>()));
+    expect(() => old.listDirectory('any'), throwsA(isA<StateError>()));
+    expect(() => old.copyDirectory('a', 'b'), throwsA(isA<StateError>()));
+
+    fs = await DbasFileSystem.getInstance();
   });
 
   // ── Cancellation ──────────────────────────────────────────────────────
@@ -589,7 +760,6 @@ void main() {
     final filePath1 = '$testDir/cancel_1.bin';
     final filePath2 = '$testDir/cancel_2.bin';
 
-    // Cancel immediately — no writes should succeed
     token.cancel();
 
     await expectLater(
@@ -607,14 +777,12 @@ void main() {
   test('CancellationToken allows in-flight tasks to complete', () async {
     final token = CancellationToken();
 
-    // Write 3 files with maxConcurrency=1 (serial execution)
     final files = {
       '$testDir/cancel_serial_1.bin': Uint8List.fromList([1]),
       '$testDir/cancel_serial_2.bin': Uint8List.fromList([2]),
       '$testDir/cancel_serial_3.bin': Uint8List.fromList([3]),
     };
 
-    // Cancel before starting — all tasks should throw
     token.cancel();
 
     await expectLater(
@@ -624,7 +792,6 @@ void main() {
   });
 
   test('readFiles with CancellationToken', () async {
-    // Set up files
     for (var i = 0; i < 5; i++) {
       await fs.writeFile('$testDir/cancel_read_$i.bin', Uint8List.fromList([i]));
     }
@@ -639,6 +806,53 @@ void main() {
       ),
       throwsA(isA<OperationCancelledException>()),
     );
+  });
+
+  // ── CancellationToken listeners ───────────────────────────────────────
+
+  test('addListener is called when cancel() is invoked', () {
+    final token = CancellationToken();
+    var called = false;
+    token.addListener(() => called = true);
+    token.cancel();
+    expect(called, isTrue);
+  });
+
+  test('addListener is called immediately when token is already cancelled', () {
+    final token = CancellationToken();
+    token.cancel();
+    var called = false;
+    token.addListener(() => called = true);
+    expect(called, isTrue);
+  });
+
+  test('cancel() is idempotent — listeners called exactly once', () {
+    final token = CancellationToken();
+    var count = 0;
+    token.addListener(() => count++);
+    token.cancel();
+    token.cancel();
+    expect(count, equals(1));
+  });
+
+  test('removeListener prevents listener from being called', () {
+    final token = CancellationToken();
+    var called = false;
+    void listener() => called = true;
+    token.addListener(listener);
+    token.removeListener(listener);
+    token.cancel();
+    expect(called, isFalse);
+  });
+
+  test('multiple listeners are all called', () {
+    final token = CancellationToken();
+    var count = 0;
+    token.addListener(() => count++);
+    token.addListener(() => count++);
+    token.addListener(() => count++);
+    token.cancel();
+    expect(count, equals(3));
   });
 
   // ── Persistent storage ────────────────────────────────────────────────
@@ -666,14 +880,12 @@ void main() {
 
   test('getInstance immediately after dispose returns fresh instance', () async {
     final old = await DbasFileSystem.getInstance();
-    // Start dispose and immediately request new instance
     final disposeFuture = old.dispose();
     final newFs = await DbasFileSystem.getInstance();
     await disposeFuture;
 
     expect(identical(old, newFs), isFalse);
 
-    // Verify the new instance works
     final path = '$testDir/post_dispose_race.bin';
     await newFs.writeFile(path, Uint8List.fromList([42]));
     expect(await newFs.readFile(path), equals(Uint8List.fromList([42])));
@@ -686,12 +898,10 @@ void main() {
   test('writeFiles with duplicate paths — last value wins', () async {
     final filePath = '$testDir/dup_bulk.bin';
 
-    // Map literal with same key — Dart Map keeps last value
     await fs.writeFiles({
       filePath: Uint8List.fromList([1, 2, 3]),
     });
 
-    // Now write again with new value
     await fs.writeFiles({
       filePath: Uint8List.fromList([4, 5, 6]),
     });
@@ -729,7 +939,6 @@ void main() {
   // ── readFileStream cancellation ───────────────────────────────────────
 
   test('readFileStream can be cancelled mid-read', () async {
-    // Write a file with enough data
     final filePath = '$testDir/stream_cancel.bin';
     final bytes = Uint8List.fromList(List.generate(1024, (i) => i % 256));
     await fs.writeFile(filePath, bytes);
@@ -739,11 +948,9 @@ void main() {
       chunksReceived++;
     });
 
-    // Cancel after first event or shortly after start
     await Future.delayed(const Duration(milliseconds: 50));
     await subscription.cancel();
 
-    // Stream should complete without error after cancellation
     expect(chunksReceived, greaterThanOrEqualTo(0));
   });
 
@@ -787,12 +994,10 @@ void main() {
       chunks.add(chunk);
     }
 
-    // Each chunk should be at most 100 bytes
     for (final chunk in chunks) {
       expect(chunk.length, lessThanOrEqualTo(100));
     }
 
-    // Total bytes should match the original
     final readBytes = chunks.expand((c) => c).toList();
     expect(readBytes, equals(bytes));
   });
@@ -822,18 +1027,15 @@ void main() {
 
   test('readFileStream respects backpressure from slow consumer', () async {
     final filePath = '$testDir/backpressure_test.bin';
-    // Write a file with multiple chunks worth of data (10 chunks of 100 bytes)
     final bytes = Uint8List.fromList(List.generate(1000, (i) => i % 256));
     await fs.writeFile(filePath, bytes);
 
     final chunks = <Uint8List>[];
     await for (final chunk in fs.readFileStream(filePath, chunkSize: 100)) {
-      // Simulate a slow consumer — the producer should not read ahead unbounded
       await Future.delayed(const Duration(milliseconds: 10));
       chunks.add(chunk);
     }
 
-    // All data should still be received correctly
     final readBytes = chunks.expand((c) => c).toList();
     expect(readBytes, equals(bytes));
     expect(chunks.length, equals(10));
@@ -891,12 +1093,8 @@ void main() {
   });
 
   test('writeFiles with onError calls callback on individual failure', () async {
-    final existingPath = '$testDir/onerror_write_existing.bin';
     final newPath = '$testDir/onerror_write_new.bin';
-    await fs.writeFile(existingPath, Uint8List.fromList([1]));
 
-    // Trigger a real failure: write to a path containing a null byte
-    // which fails path validation, while another write succeeds.
     final errors = <String, Object>{};
     await fs.writeFiles(
       {
@@ -924,5 +1122,18 @@ void main() {
     expect(identical(first, second), isFalse);
 
     fs = second;
+  });
+
+  // ── FileSystemEntry model ─────────────────────────────────────────────
+
+  test('FileSystemEntry equality and toString', () {
+    const a = FileSystemEntry(path: '/a/b', type: FileSystemEntityType.file);
+    const b = FileSystemEntry(path: '/a/b', type: FileSystemEntityType.file);
+    const c = FileSystemEntry(path: '/a/b', type: FileSystemEntityType.directory);
+
+    expect(a, equals(b));
+    expect(a, isNot(equals(c)));
+    expect(a.hashCode, equals(b.hashCode));
+    expect(a.toString(), equals('FileSystemEntry(path: /a/b, type: FileSystemEntityType.file)'));
   });
 }

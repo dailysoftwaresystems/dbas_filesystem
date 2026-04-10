@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_platform.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_platform_util.dart';
@@ -10,14 +11,43 @@ import 'package:flutter/foundation.dart';
 /// Cross-platform file system abstraction for Flutter.
 ///
 /// Provides a unified API for file and directory operations across
-/// Android, iOS, macOS, Linux, Windows, and Web (OPFS).
-/// Operations on the same path are automatically serialized via per-path locks.
+/// Android, iOS, macOS, Linux, Windows, and Web.
+///
+/// **Web storage**: On web, all storage is backed exclusively by the
+/// [Origin Private File System (OPFS)](https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system)
+/// via a pool of Web Workers. There is no fallback to IndexedDB or
+/// LocalStorage. OPFS is required for the binary streaming and parallel I/O
+/// semantics this library guarantees. If the browser does not support OPFS,
+/// [getInstance] throws [DbasFileSystemException].
+///
+/// **Thread safety**: Operations on the same path are automatically
+/// serialized via per-path locks. Operations on different paths proceed
+/// in parallel.
 class DbasFileSystem {
   static DbasFileSystem? _instance;
   static Completer<DbasFileSystem>? _initCompleter;
+  static Future<void>? _lifecycleMutex;
   final DbasFileSystemPlatform _platform;
+  bool _isDisposed = false;
 
   DbasFileSystem._(this._platform);
+
+  // ── Lifecycle mutex ───────────────────────────────────────────────────
+
+  static Future<T> _withMutex<T>(Future<T> Function() action) async {
+    final prev = _lifecycleMutex;
+    final completer = Completer<void>();
+    _lifecycleMutex = completer.future;
+    if (prev != null) await prev;
+    try {
+      return await action();
+    } finally {
+      completer.complete();
+      if (identical(_lifecycleMutex, completer.future)) {
+        _lifecycleMutex = null;
+      }
+    }
+  }
 
   /// Returns the singleton instance, creating it if needed.
   ///
@@ -31,30 +61,50 @@ class DbasFileSystem {
     final existing = _initCompleter;
     if (existing != null) return existing.future;
 
-    final completer = Completer<DbasFileSystem>();
-    _initCompleter = completer;
-    try {
-      final platform = await DbasFileSystemPlatform.create(workerPoolSize: workerPoolSize);
-      _instance = DbasFileSystem._(platform);
-      completer.complete(_instance!);
-      return _instance!;
-    } catch (e) {
-      completer.completeError(e);
-      if (identical(_initCompleter, completer)) _initCompleter = null;
-      rethrow;
-    }
+    return _withMutex(() async {
+      // Re-check after acquiring mutex — another caller may have completed init.
+      if (_instance != null) return _instance!;
+      final existing = _initCompleter;
+      if (existing != null) return existing.future;
+
+      final completer = Completer<DbasFileSystem>();
+      _initCompleter = completer;
+      try {
+        final platform = await DbasFileSystemPlatform.create(workerPoolSize: workerPoolSize);
+        _instance = DbasFileSystem._(platform);
+        completer.complete(_instance!);
+        return _instance!;
+      } catch (e) {
+        completer.completeError(e);
+        if (identical(_initCompleter, completer)) _initCompleter = null;
+        rethrow;
+      }
+    });
   }
+
+  /// Whether [dispose] has been called on this instance.
+  ///
+  /// Once `true`, all operations on this instance throw [StateError].
+  /// Call [getInstance] to obtain a fresh instance.
+  bool get isDisposed => _isDisposed;
 
   /// Disposes the singleton and releases all resources (e.g. web workers).
   ///
-  /// After calling dispose, [getInstance] will create a fresh instance.
-  /// Callers holding old references will get [StateError] on subsequent calls.
-  Future<void> dispose() async {
-    // Null out singleton first so concurrent getInstance() calls don't
-    // return the being-disposed instance.
-    _instance = null;
-    _initCompleter = null;
-    await _platform.dispose();
+  /// Gives in-flight operations up to 30 seconds to complete before
+  /// forcing teardown. After calling dispose, [getInstance] will create
+  /// a fresh instance. Callers holding old references will get
+  /// [StateError] on subsequent calls.
+  Future<void> dispose() {
+    return _withMutex(() async {
+      _isDisposed = true;
+      _instance = null;
+      _initCompleter = null;
+      await _platform.dispose();
+    });
+  }
+
+  void _assertNotDisposed() {
+    if (_isDisposed) throw StateError('DbasFileSystem has been disposed.');
   }
 
   /// Whether the underlying storage is persistent (survives browser eviction).
@@ -62,7 +112,10 @@ class DbasFileSystem {
   /// Always `true` on native platforms (Android, iOS, macOS, Linux, Windows).
   /// On web, reflects whether the browser granted persistent OPFS storage.
   /// If `false`, data may be evicted under storage pressure.
-  bool get isPersistentStorage => _platform.isPersistentStorage;
+  bool get isPersistentStorage {
+    _assertNotDisposed();
+    return _platform.isPersistentStorage;
+  }
 
   // ── Path helpers ──────────────────────────────────────────────────────
 
@@ -72,8 +125,15 @@ class DbasFileSystem {
   /// On native platforms, uses the application support directory.
   /// On web, returns a path relative to the OPFS root.
   /// Paths are always normalized to forward slashes.
-  Future<String> getAppFilePath(String fileName) =>
-      getAppFilePathImpl(fileName, DbasFileSystemPlatformUtil.isTest());
+  ///
+  /// **This method only resolves a path — it does not create directories.**
+  /// Parent directories are created automatically by write operations such
+  /// as [writeFile] and [writeFileStream]. If you need the directory to
+  /// exist before writing, call [createDirectory] explicitly.
+  Future<String> getAppFilePath(String fileName) {
+    _assertNotDisposed();
+    return getAppFilePathImpl(fileName, DbasFileSystemPlatformUtil.isTest());
+  }
 
   // ── Single file operations ────────────────────────────────────────────
 
@@ -81,38 +141,64 @@ class DbasFileSystem {
   ///
   /// If [overwrite] is `false` and the file already exists, throws
   /// [FileAlreadyExistsException]. Defaults to overwriting.
-  Future<void> writeFile(String filePath, Uint8List bytes, {bool overwrite = true}) =>
-      _platform.writeFile(filePath, bytes, overwrite: overwrite);
+  Future<void> writeFile(String filePath, Uint8List bytes, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.writeFile(filePath, bytes, overwrite: overwrite);
+  }
 
   /// Writes bytes from [stream] to [filePath], creating parent directories
   /// as needed.
   ///
   /// If [overwrite] is `false` and the file already exists, throws
   /// [FileAlreadyExistsException]. Defaults to overwriting.
-  Future<void> writeFileStream(String filePath, Stream<List<int>> stream, {bool overwrite = true}) =>
-      _platform.writeFileStream(filePath, stream, overwrite: overwrite);
+  Future<void> writeFileStream(String filePath, Stream<List<int>> stream, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.writeFileStream(filePath, stream, overwrite: overwrite);
+  }
+
+  /// Appends [bytes] to the file at [filePath], creating the file and any
+  /// parent directories if they do not exist.
+  Future<void> appendFile(String filePath, Uint8List bytes) {
+    _assertNotDisposed();
+    return _platform.appendFile(filePath, bytes);
+  }
+
+  /// Appends bytes from [stream] to the file at [filePath], creating the
+  /// file and any parent directories if they do not exist.
+  Future<void> appendFileStream(String filePath, Stream<List<int>> stream) {
+    _assertNotDisposed();
+    return _platform.appendFileStream(filePath, stream);
+  }
 
   /// Reads the entire file at [filePath] into memory.
   ///
   /// Throws [FileNotFoundException] if the file does not exist.
-  Future<Uint8List> readFile(String filePath) =>
-      _platform.readFile(filePath);
+  Future<Uint8List> readFile(String filePath) {
+    _assertNotDisposed();
+    return _platform.readFile(filePath);
+  }
 
   /// Reads the file at [filePath] as a stream of byte chunks.
   ///
   /// Each chunk is at most [chunkSize] bytes (default 64 KB). The last chunk
   /// may be smaller if the remaining file content is less than [chunkSize].
   /// Throws [FileNotFoundException] if the file does not exist.
-  Stream<Uint8List> readFileStream(String filePath, {int chunkSize = 65536}) =>
-      _platform.readFileStream(filePath, chunkSize: chunkSize);
+  Stream<Uint8List> readFileStream(String filePath, {int chunkSize = 65536}) {
+    _assertNotDisposed();
+    return _platform.readFileStream(filePath, chunkSize: chunkSize);
+  }
 
   /// Deletes the file at [filePath]. No-op if the file does not exist.
-  Future<void> deleteFile(String filePath) =>
-      _platform.deleteFile(filePath);
+  Future<void> deleteFile(String filePath) {
+    _assertNotDisposed();
+    return _platform.deleteFile(filePath);
+  }
 
   /// Returns `true` if a file exists at [filePath].
-  Future<bool> fileExists(String filePath) =>
-      _platform.fileExists(filePath);
+  Future<bool> fileExists(String filePath) {
+    _assertNotDisposed();
+    return _platform.fileExists(filePath);
+  }
 
   /// Copies the file at [sourcePath] to [destPath], creating parent
   /// directories as needed.
@@ -120,8 +206,10 @@ class DbasFileSystem {
   /// If [overwrite] is `false` and the destination already exists, throws
   /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) =>
-      _platform.copyFile(sourcePath, destPath, overwrite: overwrite);
+  Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.copyFile(sourcePath, destPath, overwrite: overwrite);
+  }
 
   /// Moves the file at [sourcePath] to [destPath], creating parent
   /// directories as needed.
@@ -130,8 +218,10 @@ class DbasFileSystem {
   /// If [overwrite] is `false` and the destination already exists, throws
   /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) =>
-      _platform.moveFile(sourcePath, destPath, overwrite: overwrite);
+  Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.moveFile(sourcePath, destPath, overwrite: overwrite);
+  }
 
   /// Renames the file at [oldPath] to [newPath], creating parent
   /// directories as needed.
@@ -139,22 +229,28 @@ class DbasFileSystem {
   /// If [overwrite] is `false` and the destination already exists, throws
   /// [FileAlreadyExistsException]. Defaults to overwriting.
   /// Throws [FileNotFoundException] if the source file does not exist.
-  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) =>
-      _platform.renameFile(oldPath, newPath, overwrite: overwrite);
+  Future<void> renameFile(String oldPath, String newPath, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.renameFile(oldPath, newPath, overwrite: overwrite);
+  }
 
   // ── File metadata ─────────────────────────────────────────────────────
 
   /// Returns the size of the file at [filePath] in bytes.
   ///
   /// Throws [FileNotFoundException] if the file does not exist.
-  Future<int> getFileSize(String filePath) =>
-      _platform.getFileSize(filePath);
+  Future<int> getFileSize(String filePath) {
+    _assertNotDisposed();
+    return _platform.getFileSize(filePath);
+  }
 
   /// Returns the last-modified timestamp (UTC) of the file at [filePath].
   ///
   /// Throws [FileNotFoundException] if the file does not exist.
-  Future<DateTime> getLastModified(String filePath) =>
-      _platform.getLastModified(filePath);
+  Future<DateTime> getLastModified(String filePath) {
+    _assertNotDisposed();
+    return _platform.getLastModified(filePath);
+  }
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
@@ -181,8 +277,10 @@ class DbasFileSystem {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
-  }) =>
-      _platform.writeFiles(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }) {
+    _assertNotDisposed();
+    return _platform.writeFiles(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }
 
   /// Writes multiple files from streams concurrently, bounded by
   /// [maxConcurrency].
@@ -202,8 +300,10 @@ class DbasFileSystem {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
-  }) =>
-      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }) {
+    _assertNotDisposed();
+    return _platform.writeFilesStream(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }
 
   /// Reads multiple files concurrently, bounded by [maxConcurrency].
   ///
@@ -228,8 +328,10 @@ class DbasFileSystem {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
     void Function(String path, Object error)? onError,
-  }) =>
-      _platform.readFiles(paths, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }) {
+    _assertNotDisposed();
+    return _platform.readFiles(paths, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
+  }
 
   // ── Directory operations ──────────────────────────────────────────────
 
@@ -238,31 +340,56 @@ class DbasFileSystem {
   /// If [recursive] is `true` (default), creates all missing parent
   /// directories. If `false`, throws [DirectoryNotFoundException] when
   /// the parent does not exist.
-  Future<void> createDirectory(String dirPath, {bool recursive = true}) =>
-      _platform.createDirectory(dirPath, recursive: recursive);
+  Future<void> createDirectory(String dirPath, {bool recursive = true}) {
+    _assertNotDisposed();
+    return _platform.createDirectory(dirPath, recursive: recursive);
+  }
 
   /// Returns `true` if a directory exists at [dirPath].
-  Future<bool> directoryExists(String dirPath) =>
-      _platform.directoryExists(dirPath);
+  Future<bool> directoryExists(String dirPath) {
+    _assertNotDisposed();
+    return _platform.directoryExists(dirPath);
+  }
 
   /// Lists the entries in the directory at [dirPath].
   ///
   /// If [recursive] is `true`, lists all entries in subdirectories as well.
-  /// Returns full paths normalized to forward slashes.
+  /// Each entry includes a normalized forward-slash path and its type
+  /// ([FileSystemEntityType.file] or [FileSystemEntityType.directory]).
   /// Throws [DirectoryNotFoundException] if the directory does not exist.
-  Future<List<String>> listDirectory(String dirPath, {bool recursive = false}) =>
-      _platform.listDirectory(dirPath, recursive: recursive);
+  Future<List<FileSystemEntry>> listDirectory(String dirPath, {bool recursive = false}) {
+    _assertNotDisposed();
+    return _platform.listDirectory(dirPath, recursive: recursive);
+  }
 
   /// Deletes the directory at [dirPath]. No-op if it does not exist.
   ///
   /// If [recursive] is `false` (default) and the directory is not empty,
   /// throws [DirectoryNotEmptyException].
-  Future<void> deleteDirectory(String dirPath, {bool recursive = false}) =>
-      _platform.deleteDirectory(dirPath, recursive: recursive);
+  Future<void> deleteDirectory(String dirPath, {bool recursive = false}) {
+    _assertNotDisposed();
+    return _platform.deleteDirectory(dirPath, recursive: recursive);
+  }
 
   /// Renames the directory at [oldPath] to [newPath].
   ///
   /// Throws [DirectoryNotFoundException] if the source does not exist.
-  Future<void> renameDirectory(String oldPath, String newPath) =>
-      _platform.renameDirectory(oldPath, newPath);
+  Future<void> renameDirectory(String oldPath, String newPath) {
+    _assertNotDisposed();
+    return _platform.renameDirectory(oldPath, newPath);
+  }
+
+  /// Copies the directory at [sourcePath] to [destPath], creating the
+  /// destination and any missing parent directories as needed.
+  ///
+  /// This is a merge operation: files in [destPath] that have no counterpart
+  /// in [sourcePath] are left untouched. If [overwrite] is `false` and any
+  /// file at a matching path already exists in the destination, throws
+  /// [FileAlreadyExistsException]. Defaults to overwriting conflicting files.
+  ///
+  /// Throws [DirectoryNotFoundException] if [sourcePath] does not exist.
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) {
+    _assertNotDisposed();
+    return _platform.copyDirectory(sourcePath, destPath, overwrite: overwrite);
+  }
 }

@@ -178,10 +178,10 @@ void main() {
     final entries = await fs.listDirectory('$testRoot/list_dir');
 
     for (final entry in entries) {
-      expect(entry.contains('\\'), isFalse, reason: 'Path should be normalized: $entry');
+      expect(entry.path.contains('\\'), isFalse, reason: 'Path should be normalized: ${entry.path}');
     }
 
-    final names = entries.map((e) => e.split('/').last).toList()..sort();
+    final names = entries.map((e) => e.path.split('/').last).toList()..sort();
     expect(names, equals(['a.bin', 'b.bin']));
   });
 

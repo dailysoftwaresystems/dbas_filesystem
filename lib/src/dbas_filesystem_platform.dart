@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
@@ -38,6 +39,16 @@ final class DbasFileSystemPlatform {
   Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) {
     DbasPathValidator.validate(path);
     return _lock.synchronized(path, () => _delegate.writeFileStream(path, stream, overwrite: overwrite));
+  }
+
+  Future<void> appendFile(String path, Uint8List bytes) {
+    DbasPathValidator.validate(path);
+    return _lock.synchronized(path, () => _delegate.appendFile(path, bytes));
+  }
+
+  Future<void> appendFileStream(String path, Stream<List<int>> stream) {
+    DbasPathValidator.validate(path);
+    return _lock.synchronized(path, () => _delegate.appendFileStream(path, stream));
   }
 
   Future<Uint8List> readFile(String path) {
@@ -112,9 +123,6 @@ final class DbasFileSystemPlatform {
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
-  /// Wraps a path-keyed task with an optional error handler.
-  /// If [onError] is null, returns [task] unchanged.
-  /// Otherwise, catches non-cancellation errors and invokes the callback.
   static Future<T> Function() _withErrorHandler<T>(
     String path,
     Future<T> Function() task,
@@ -198,7 +206,7 @@ final class DbasFileSystemPlatform {
     return _lock.synchronized(path, () => _delegate.directoryExists(path));
   }
 
-  Future<List<String>> listDirectory(String path, {bool recursive = false}) {
+  Future<List<FileSystemEntry>> listDirectory(String path, {bool recursive = false}) {
     DbasPathValidator.validate(path);
     return _lock.synchronized(path, () => _delegate.listDirectory(path, recursive: recursive));
   }
@@ -211,5 +219,10 @@ final class DbasFileSystemPlatform {
   Future<void> renameDirectory(String oldPath, String newPath) {
     DbasPathValidator.validateAll([oldPath, newPath]);
     return _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameDirectory(oldPath, newPath));
+  }
+
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) {
+    DbasPathValidator.validateAll([sourcePath, destPath]);
+    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.copyDirectory(sourcePath, destPath, overwrite: overwrite));
   }
 }

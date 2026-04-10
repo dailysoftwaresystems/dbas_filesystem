@@ -1,3 +1,35 @@
+## 3.0.0
+
+### Breaking changes
+
+* **`listDirectory` returns typed entries**: `listDirectory` now returns `List<FileSystemEntry>` instead of `List<String>`. Each `FileSystemEntry` has a `path` (normalized forward-slash string) and a `type` (`FileSystemEntityType.file` or `FileSystemEntityType.directory`). Update call sites from `entry` to `entry.path` for path access.
+
+### New features
+
+* **`appendFile` and `appendFileStream`**: Append bytes to existing files, or create them if they don't exist. Parent directories are created automatically, consistent with `writeFile`.
+* **`copyDirectory`**: Copies a directory tree with merge semantics — files at matching paths in the destination are overwritten (or throw `FileAlreadyExistsException` with `overwrite: false`), while non-conflicting destination files are preserved.
+* **`isDisposed` getter**: Returns `true` after `dispose()` has been called. All subsequent operations on a disposed instance throw `StateError`.
+* **`CancellationToken` listener API**: `addListener` / `removeListener` for reactive cancellation. Listeners registered after cancellation are called immediately. Listeners are invoked synchronously in `cancel()` exactly once.
+* **Web worker auto-restart**: Crashed workers are automatically restarted with exponential backoff (first 3 retries immediate, then 1s, 2s, 4s... capped at 60s, max 5 retries per slot). Previously, a crashed worker was permanently removed from the pool.
+
+### Fixes
+
+* **Unified error handling**: Replaced `_throwIfNotFound` / `_throwIfDirNotFound` with a single `handleError` method. All native methods now catch `FileSystemException` and map to typed exceptions. Added ENOTDIR (20), EISDIR (21), and Windows ERROR_PATH_NOT_FOUND (3) mappings.
+* **Web `PermissionDeniedException`**: OPFS `NotAllowedError` now maps to `PermissionDeniedException` instead of a generic `DbasFileSystemException`.
+* **Native `moveFile` rollback safety**: Cross-device move fallback no longer deletes the destination when source deletion fails. Matches web behaviour — data at the destination (which was successfully copied) is preserved.
+* **Dispose race condition**: `getInstance()` and `dispose()` now use a static mutex to prevent overlapping execution. Previously, a concurrent `getInstance()` during `dispose()` could receive a being-disposed native interface.
+* **Graceful dispose with timeout**: `dispose()` gives in-flight operations up to 30 seconds to complete before forcing teardown, instead of waiting indefinitely.
+
+### Improvements
+
+* **Documentation**: `getAppFilePath` doc comment clarifies it is side-effect free (no directory creation). README explains OPFS-only web strategy (no IndexedDB/LocalStorage fallback). Worker crash troubleshooting updated for auto-restart behaviour.
+* **`_assertNotDisposed` guard**: Every public method on `DbasFileSystem` checks `isDisposed` before delegating, providing immediate `StateError` instead of relying on the `PathLock` disposed check.
+
+### Tests
+
+* 20+ new tests: `appendFile`/`appendFileStream` (6 tests), `copyDirectory` (5 tests), `listDirectory` typed entries (2 tests), `CancellationToken` listeners (5 tests), `isDisposed` lifecycle (3 tests), `FileSystemEntry` model (1 test).
+* Updated all existing `listDirectory` tests for the new `FileSystemEntry` return type.
+
 ## 2.3.0
 
 ### New features

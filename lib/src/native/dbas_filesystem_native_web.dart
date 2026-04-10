@@ -1,21 +1,26 @@
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 import 'dbas_filesystem_native_interface.dart';
 
+// ── Worker handle ───────────────────────────────────────────────────────
+
 class _WorkerHandle {
   final web.Worker worker;
+  final void Function() onCrash;
   int _nextRequestId = 0;
   bool _crashed = false;
   final Map<int, Completer<dynamic>> _pendingRequests = {};
 
   int get pendingCount => _pendingRequests.length;
 
-  _WorkerHandle(this.worker) {
+  _WorkerHandle(this.worker, {required this.onCrash}) {
     worker.onmessage = ((web.MessageEvent e) => _onMessage(e)).toJS;
     worker.onerror = ((web.Event e) => _onError(e)).toJS;
   }
@@ -29,8 +34,6 @@ class _WorkerHandle {
     final id = _nextRequestId++;
     final completer = Completer<dynamic>();
     _pendingRequests[id] = completer;
-    // Convert any Uint8List/List<int> bytes to a plain List<int> for reliable
-    // jsify() conversion. jsify() handles List<int> correctly as a JS Array.
     final safeArgs = args != null ? _sanitizeArgs(args) : <String, dynamic>{};
     worker.postMessage(<String, dynamic>{
       'id': id, 'method': method, 'args': safeArgs,
@@ -43,7 +46,6 @@ class _WorkerHandle {
     for (final entry in args.entries) {
       final value = entry.value;
       if (value is Uint8List) {
-        // Convert typed byte buffer to plain growable list for jsify()
         result[entry.key] = value.toList();
       } else {
         result[entry.key] = value;
@@ -74,16 +76,15 @@ class _WorkerHandle {
 
   void _onError(web.Event event) {
     _crashed = true;
-    // All pending and future requests will receive this error, including
-    // pinned workers mid-stream (readFileStream / writeFileStream).
     final error = DbasFileSystemException(
-      'Worker crashed unexpectedly. Call dispose() and re-initialize.',
+      'Worker crashed unexpectedly. Restarting...',
     );
     for (final completer in _pendingRequests.values) {
       if (!completer.isCompleted) completer.completeError(error);
     }
     _pendingRequests.clear();
     worker.terminate();
+    onCrash();
   }
 
   void terminate() {
@@ -96,8 +97,6 @@ class _WorkerHandle {
     worker.terminate();
   }
 
-  /// Maps structured worker error objects to typed exceptions.
-  /// Error codes must match the fsError() codes in dbas_filesystem_worker.js.
   static DbasFileSystemException _mapWorkerError(Map<Object?, Object?> err) {
     final code = err['code']?.toString() ?? 'UNKNOWN';
     final path = err['path']?.toString() ?? '';
@@ -110,6 +109,8 @@ class _WorkerHandle {
         return DirectoryNotFoundException(path);
       case 'DIRECTORY_NOT_EMPTY':
         return DirectoryNotEmptyException(path);
+      case 'PERMISSION_DENIED':
+        return PermissionDeniedException(path);
       default:
         final msg = err['message']?.toString() ?? code;
         return DbasFileSystemException(msg, path: path.isNotEmpty ? path : null);
@@ -117,9 +118,89 @@ class _WorkerHandle {
   }
 }
 
-/// Extracts a Uint8List from a worker result's `bytes` field.
-/// The worker converts Uint8Array to Array before postMessage, so dartify()
-/// produces a List of num. We convert that to Uint8List.
+// ── Worker slot (supervises one worker with auto-restart) ───────────────
+
+class _WorkerSlot {
+  final String workerUrl;
+  final int maxRetries;
+  _WorkerHandle? currentHandle;
+  int _attemptCount = 0;
+  bool _gaveUp = false;
+  bool _disposed = false;
+  bool _restarting = false;
+
+  _WorkerSlot({required this.workerUrl, this.maxRetries = 5}); // ignore: unused_element_parameter — maxRetries is configurable but uses a sensible default
+
+  bool get isAvailable => currentHandle != null && !currentHandle!._crashed && !_gaveUp && !_disposed;
+  int get pendingCount => currentHandle?.pendingCount ?? 0;
+
+  /// Computes delay for a given attempt number.
+  /// Attempts 1-3: no delay. Attempt 4+: exponential backoff capped at 60s.
+  Duration _delayFor(int attempt) {
+    if (attempt <= 3) return Duration.zero;
+    final seconds = math.min(math.pow(2, attempt - 4).toInt(), 60);
+    return Duration(seconds: seconds);
+  }
+
+  /// Spawns the initial worker. Called during pool initialization.
+  Future<dynamic> start() async {
+    final worker = web.Worker(workerUrl.toJS);
+    final handle = _WorkerHandle(worker, onCrash: _onCrash);
+    currentHandle = handle;
+    return handle.send('initialize');
+  }
+
+  void _onCrash() {
+    if (_disposed || _restarting) return;
+    currentHandle = null;
+    _restart();
+  }
+
+  Future<void> _restart() async {
+    _restarting = true;
+    _attemptCount++;
+    if (_attemptCount > maxRetries) {
+      _gaveUp = true;
+      _restarting = false;
+      return;
+    }
+    final delay = _delayFor(_attemptCount);
+    if (delay > Duration.zero) await Future.delayed(delay);
+    if (_disposed) { _restarting = false; return; }
+
+    final worker = web.Worker(workerUrl.toJS);
+    final handle = _WorkerHandle(worker, onCrash: _onCrash);
+    try {
+      await handle.send('initialize');
+      if (_disposed) {
+        handle.terminate();
+        _restarting = false;
+        return;
+      }
+      currentHandle = handle;
+      _attemptCount = 0; // reset on success
+      _restarting = false;
+    } catch (_) {
+      worker.terminate();
+      if (!_disposed) {
+        _restarting = false;
+        _restart(); // counts as another attempt
+      } else {
+        _restarting = false;
+      }
+    }
+  }
+
+  void dispose() {
+    _disposed = true;
+    _restarting = false;
+    currentHandle?.terminate();
+    currentHandle = null;
+  }
+}
+
+// ── Byte extraction helper ──────────────────────────────────────────────
+
 Uint8List _extractBytes(dynamic result) {
   if (result is Map && result['bytes'] != null) {
     final bytes = result['bytes'];
@@ -133,8 +214,12 @@ Uint8List _extractBytes(dynamic result) {
   throw DbasFileSystemException('Unexpected response from worker: missing bytes');
 }
 
+// ── Web platform implementation ─────────────────────────────────────────
+
 class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
-  final List<_WorkerHandle> _workers = [];
+  static const String _workerUrl = 'assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js';
+
+  final List<_WorkerSlot> _slots = [];
   bool _initialized = false;
   bool _isPersistentStorage = false;
   int _nextStreamId = 0;
@@ -149,11 +234,15 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   // ── Worker pool ───────────────────────────────────────────────────────
 
   _WorkerHandle _pickWorker() {
-    final alive = _workers.where((w) => !w._crashed).toList();
-    if (alive.isEmpty) {
-      throw DbasFileSystemException('All workers have crashed. Re-initialize required.');
+    final available = _slots.where((s) => s.isAvailable).toList();
+    if (available.isEmpty) {
+      if (_slots.every((s) => s._gaveUp)) {
+        throw DbasFileSystemException('All workers have permanently failed. Re-initialize required.');
+      }
+      throw DbasFileSystemException('No workers available (all restarting). Try again shortly.');
     }
-    return alive.reduce((a, b) => a.pendingCount <= b.pendingCount ? a : b);
+    final slot = available.reduce((a, b) => a.pendingCount <= b.pendingCount ? a : b);
+    return slot.currentHandle!;
   }
 
   Future<dynamic> _send(String method, [Map<String, dynamic>? args]) {
@@ -164,28 +253,25 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
 
   @override
   Future<void> initialize({int workerPoolSize = 4}) async {
-    if (_initialized && _workers.isNotEmpty) return;
+    if (_initialized && _slots.isNotEmpty) return;
 
     try {
-      const workerUrl = 'assets/packages/dbas_filesystem/web/libs/dbas_filesystem_worker.js';
       final initFutures = <Future<dynamic>>[];
       for (var i = 0; i < workerPoolSize; i++) {
-        final worker = web.Worker(workerUrl.toJS);
-        final handle = _WorkerHandle(worker);
-        _workers.add(handle);
-        initFutures.add(handle.send('initialize'));
+        final slot = _WorkerSlot(workerUrl: _workerUrl);
+        _slots.add(slot);
+        initFutures.add(slot.start());
       }
       final results = await Future.wait(initFutures);
-      // All workers share the same storage context; check persistence from the first.
       if (results.isNotEmpty && results.first is Map) {
         _isPersistentStorage = (results.first as Map)['persistentStorage'] == true;
       }
       _initialized = true;
     } catch (e) {
-      for (final w in _workers) {
-        w.worker.terminate();
+      for (final s in _slots) {
+        s.dispose();
       }
-      _workers.clear();
+      _slots.clear();
       _initialized = false;
       throw DbasFileSystemException('Failed to initialize DbasFileSystemNativeWeb: $e');
     }
@@ -193,10 +279,10 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
 
   @override
   Future<void> dispose() async {
-    for (final w in _workers) {
-      w.terminate();
+    for (final s in _slots) {
+      s.dispose();
     }
-    _workers.clear();
+    _slots.clear();
     _initialized = false;
     _isPersistentStorage = false;
   }
@@ -213,6 +299,27 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     final worker = _pickWorker(); // pin for entire stream
     final streamId = _nextStreamId++;
     await worker.send('beginStreamWrite', {'path': path, 'streamId': streamId, 'overwrite': overwrite});
+    try {
+      await for (final chunk in stream) {
+        await worker.send('streamWriteChunk', {'streamId': streamId, 'bytes': chunk});
+      }
+      await worker.send('endStreamWrite', {'streamId': streamId});
+    } catch (e) {
+      try { await worker.send('abortStreamWrite', {'streamId': streamId}); } catch (_) {}
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> appendFile(String path, Uint8List bytes) async {
+    await _send('appendFile', {'path': path, 'bytes': bytes});
+  }
+
+  @override
+  Future<void> appendFileStream(String path, Stream<List<int>> stream) async {
+    final worker = _pickWorker(); // pin for entire stream
+    final streamId = _nextStreamId++;
+    await worker.send('beginStreamAppend', {'path': path, 'streamId': streamId});
     try {
       await for (final chunk in stream) {
         await worker.send('streamWriteChunk', {'streamId': streamId, 'bytes': chunk});
@@ -338,10 +445,16 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<String>> listDirectory(String path, {bool recursive = false}) async {
+  Future<List<FileSystemEntry>> listDirectory(String path, {bool recursive = false}) async {
     final result = await _send('listDirectory', {'path': path, 'recursive': recursive});
     if (result is List) {
-      return result.map((e) => e.toString()).toList();
+      return result.map((e) {
+        if (e is! Map) throw DbasFileSystemException('Unexpected entry format from worker for listDirectory', path: path);
+        final entryPath = e['path']?.toString() ?? '';
+        final kind = e['type']?.toString() ?? '';
+        final type = kind == 'directory' ? FileSystemEntityType.directory : FileSystemEntityType.file;
+        return FileSystemEntry(path: entryPath, type: type);
+      }).toList();
     }
     throw DbasFileSystemException('Unexpected response from worker for listDirectory', path: path);
   }
@@ -354,5 +467,10 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   @override
   Future<void> renameDirectory(String oldPath, String newPath) async {
     await _send('renameDirectory', {'oldPath': oldPath, 'newPath': newPath});
+  }
+
+  @override
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) async {
+    await _send('copyDirectory', {'sourcePath': sourcePath, 'destPath': destPath, 'overwrite': overwrite});
   }
 }

@@ -18,6 +18,8 @@ self.onmessage = async function (e) {
     } catch (error) {
         if (error && error.fsCode) {
             self.postMessage({ id, error: { code: error.fsCode, path: error.fsPath || null } });
+        } else if (error && error.name === 'NotAllowedError') {
+            self.postMessage({ id, error: { code: 'PERMISSION_DENIED', path: null } });
         } else {
             const msg = error ? (error.message || String(error)) : 'Unknown error';
             self.postMessage({ id, error: { code: 'UNKNOWN', message: msg } });
@@ -66,6 +68,24 @@ async function handleMessage(method, args) {
             const writable = await fileHandle.createWritable();
             await writable.write(new Uint8Array(args.bytes));
             await writable.close();
+            return true;
+        }
+
+        case 'appendFile': {
+            const dirHandle = await ensureParentDir(args.path);
+            const name = getFileName(args.path);
+            const fileHandle = await dirHandle.getFileHandle(name, { create: true });
+            const existingFile = await fileHandle.getFile();
+            const offset = existingFile.size;
+            const writable = await fileHandle.createWritable({ keepExistingData: true });
+            try {
+                await writable.seek(offset);
+                await writable.write(new Uint8Array(args.bytes));
+                await writable.close();
+            } catch (e) {
+                try { await writable.abort(); } catch (_) {}
+                throw e;
+            }
             return true;
         }
 
@@ -156,6 +176,23 @@ async function handleMessage(method, args) {
             return true;
         }
 
+        case 'beginStreamAppend': {
+            const dirHandle = await ensureParentDir(args.path);
+            const name = getFileName(args.path);
+            const fileHandle = await dirHandle.getFileHandle(name, { create: true });
+            const existingFile = await fileHandle.getFile();
+            const offset = existingFile.size;
+            const writable = await fileHandle.createWritable({ keepExistingData: true });
+            try {
+                await writable.seek(offset);
+            } catch (e) {
+                try { await writable.abort(); } catch (_) {}
+                throw e;
+            }
+            activeWritables.set(args.streamId, writable);
+            return true;
+        }
+
         case 'streamWriteChunk': {
             const writable = activeWritables.get(args.streamId);
             if (!writable) throw new Error('No active stream for id: ' + args.streamId);
@@ -242,8 +279,8 @@ async function handleMessage(method, args) {
             if (args.recursive) {
                 await listDirectoryRecursive(dirHandle, prefix, entries);
             } else {
-                for await (const [name] of dirHandle.entries()) {
-                    entries.push(prefix + name);
+                for await (const [name, handle] of dirHandle.entries()) {
+                    entries.push({ path: prefix + name, type: handle.kind === 'directory' ? 'directory' : 'file' });
                 }
             }
             return entries;
@@ -290,6 +327,18 @@ async function handleMessage(method, args) {
             return true;
         }
 
+        case 'copyDirectory': {
+            let srcDir;
+            try {
+                srcDir = await navigateToDir(args.sourcePath);
+            } catch (e) {
+                if (e.name === 'NotFoundError') throw fsError('DIRECTORY_NOT_FOUND', args.sourcePath);
+                throw e;
+            }
+            await copyDirectoryRecursive(srcDir, args.destPath, args.overwrite !== false);
+            return true;
+        }
+
         case 'renameDirectory': {
             let srcDir;
             try {
@@ -299,7 +348,7 @@ async function handleMessage(method, args) {
                 throw e;
             }
             try {
-                await copyDirectoryRecursive(srcDir, args.newPath);
+                await copyDirectoryRecursive(srcDir, args.newPath, true);
                 await handleMessage('deleteDirectory', { path: args.oldPath, recursive: true });
             } catch (e) {
                 try { await handleMessage('deleteDirectory', { path: args.newPath, recursive: true }); } catch (_) {}
@@ -422,18 +471,27 @@ async function navigateToDir(dirPath) {
 
 async function listDirectoryRecursive(dirHandle, prefix, entries) {
     for await (const [name, handle] of dirHandle.entries()) {
-        entries.push(prefix + name);
+        entries.push({ path: prefix + name, type: handle.kind === 'directory' ? 'directory' : 'file' });
         if (handle.kind === 'directory') {
             await listDirectoryRecursive(handle, prefix + name + '/', entries);
         }
     }
 }
 
-async function copyDirectoryRecursive(srcDirHandle, destPath) {
+async function copyDirectoryRecursive(srcDirHandle, destPath, overwrite) {
     const destDirHandle = await ensureDir(destPath);
     for await (const [name, handle] of srcDirHandle.entries()) {
         const childDest = normalizePath(destPath) + '/' + name;
         if (handle.kind === 'file') {
+            if (overwrite === false) {
+                try {
+                    await destDirHandle.getFileHandle(name);
+                    throw fsError('FILE_ALREADY_EXISTS', childDest);
+                } catch (e) {
+                    if (e.fsCode) throw e;
+                    if (e.name !== 'NotFoundError') throw e;
+                }
+            }
             const file = await handle.getFile();
             const destFileHandle = await destDirHandle.getFileHandle(name, { create: true });
             const writable = await destFileHandle.createWritable();
@@ -445,7 +503,7 @@ async function copyDirectoryRecursive(srcDirHandle, destPath) {
                 throw e;
             }
         } else if (handle.kind === 'directory') {
-            await copyDirectoryRecursive(handle, childDest);
+            await copyDirectoryRecursive(handle, childDest, overwrite);
         }
     }
 }

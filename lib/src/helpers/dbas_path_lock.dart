@@ -7,7 +7,13 @@ class PathLock {
   Future<void> dispose() async {
     _disposed = true;
     if (_locks.isNotEmpty) {
-      await Future.wait(_locks.values.toList());
+      try {
+        await Future.wait(_locks.values.toList())
+            .timeout(const Duration(seconds: 30));
+      } on TimeoutException {
+        // In-flight operations did not complete within the grace period.
+        // Proceed with teardown to avoid hanging forever.
+      }
       _locks.clear();
     }
   }

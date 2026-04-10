@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_entry.dart';
 import 'package:dbas_filesystem/src/native/dbas_filesystem_native_interface.dart';
 
 /// Shared stub base for platforms where the real implementation is not
@@ -21,6 +22,10 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) => _unsupported();
   @override
   Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) => _unsupported();
+  @override
+  Future<void> appendFile(String path, Uint8List bytes) => _unsupported();
+  @override
+  Future<void> appendFileStream(String path, Stream<List<int>> stream) => _unsupported();
   @override
   Future<Uint8List> readFile(String path) => _unsupported();
   @override
@@ -44,9 +49,11 @@ class DbasFileSystemNativeStub extends DbasFileSystemNativeInterface {
   @override
   Future<bool> directoryExists(String path) => _unsupported();
   @override
-  Future<List<String>> listDirectory(String path, {bool recursive = false}) => _unsupported();
+  Future<List<FileSystemEntry>> listDirectory(String path, {bool recursive = false}) => _unsupported();
   @override
   Future<void> deleteDirectory(String path, {bool recursive = false}) => _unsupported();
   @override
   Future<void> renameDirectory(String oldPath, String newPath) => _unsupported();
+  @override
+  Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = true}) => _unsupported();
 }
