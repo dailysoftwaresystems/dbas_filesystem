@@ -15,7 +15,10 @@
       "Bash(chromedriver:*)",
       "Bash(flutter drive:*)",
       "Bash(awk '{print $NF}')",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "Bash(awk -F'|' '{split\\($1, date, \"T\"\\); print date[1], $2}')",
+      "Bash(find lib:*)",
+      "Bash(awk -F'|' '{split\\($1, date, \"T\"\\); split\\(date[1], d, \"-\"\\); if\\(prev != d[1] d[2]\\) {if\\(prev != \"\"\\) print prev, count; count=1; prev=d[1] d[2]} else count++} END {print prev, count}')"
     ]
   }
 }
