@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:js_interop';
+import 'dart:typed_data';
+
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
-import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 import 'package:web/web.dart' as web;
 import 'dbas_filesystem_native_interface.dart';
@@ -26,10 +27,27 @@ class _WorkerHandle {
     final id = _nextRequestId++;
     final completer = Completer<dynamic>();
     _pendingRequests[id] = completer;
+    // Convert any Uint8List/List<int> bytes to a plain List<int> for reliable
+    // jsify() conversion. jsify() handles List<int> correctly as a JS Array.
+    final safeArgs = args != null ? _sanitizeArgs(args) : <String, dynamic>{};
     worker.postMessage(<String, dynamic>{
-      'id': id, 'method': method, 'args': args ?? {},
+      'id': id, 'method': method, 'args': safeArgs,
     }.jsify());
     return completer.future;
+  }
+
+  static Map<String, dynamic> _sanitizeArgs(Map<String, dynamic> args) {
+    final result = <String, dynamic>{};
+    for (final entry in args.entries) {
+      final value = entry.value;
+      if (value is Uint8List) {
+        // Convert typed byte buffer to plain growable list for jsify()
+        result[entry.key] = value.toList();
+      } else {
+        result[entry.key] = value;
+      }
+    }
+    return result;
   }
 
   void _onMessage(web.MessageEvent event) {
@@ -59,6 +77,16 @@ class _WorkerHandle {
     worker.terminate();
   }
 
+  void terminate() {
+    _crashed = true;
+    final error = DbasFileSystemException('Worker terminated.');
+    for (final completer in _pendingRequests.values) {
+      if (!completer.isCompleted) completer.completeError(error);
+    }
+    _pendingRequests.clear();
+    worker.terminate();
+  }
+
   /// Maps worker error message prefixes to typed exceptions.
   /// Prefixes must match the Error strings thrown in dbas_filesystem_worker.js.
   static DbasFileSystemException _mapWorkerError(String msg) {
@@ -76,6 +104,22 @@ class _WorkerHandle {
     }
     return DbasFileSystemException(msg);
   }
+}
+
+/// Extracts a Uint8List from a worker result's `bytes` field.
+/// The worker converts Uint8Array to Array before postMessage, so dartify()
+/// produces a List of num. We convert that to Uint8List.
+Uint8List _extractBytes(dynamic result) {
+  if (result is Map && result['bytes'] != null) {
+    final bytes = result['bytes'];
+    if (bytes is Uint8List) return bytes;
+    if (bytes is List) {
+      return Uint8List.fromList(
+        bytes.map<int>((e) => (e as num).toInt()).toList(),
+      );
+    }
+  }
+  throw DbasFileSystemException('Unexpected response from worker: missing bytes');
 }
 
 class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
@@ -128,18 +172,27 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
     }
   }
 
+  @override
+  Future<void> dispose() async {
+    for (final w in _workers) {
+      w.terminate();
+    }
+    _workers.clear();
+    _initialized = false;
+  }
+
   // ── Single file operations ────────────────────────────────────────────
 
   @override
-  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true}) async {
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) async {
     await _send('writeFile', {'path': path, 'bytes': bytes, 'overwrite': overwrite});
   }
 
   @override
-  Future<void> writeFileStream(String path, Stream<List<int>> stream) async {
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) async {
     final worker = _pickWorker(); // pin for entire stream
     final streamId = _nextStreamId++;
-    await worker.send('beginStreamWrite', {'path': path, 'streamId': streamId});
+    await worker.send('beginStreamWrite', {'path': path, 'streamId': streamId, 'overwrite': overwrite});
     try {
       await for (final chunk in stream) {
         await worker.send('streamWriteChunk', {'streamId': streamId, 'bytes': chunk});
@@ -152,21 +205,18 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<int>> readFile(String path) async {
+  Future<Uint8List> readFile(String path) async {
     final result = await _send('readFile', {'path': path});
-    if (result is Map && result['bytes'] is List) {
-      return (result['bytes'] as List).cast<num>().map((e) => e.toInt()).toList();
-    }
-    throw DbasFileSystemException('Unexpected response from worker for readFile', path: path);
+    return _extractBytes(result);
   }
 
   @override
-  Stream<List<int>> readFileStream(String path, {int chunkSize = 65536}) {
-    late StreamController<List<int>> controller;
+  Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
+    late StreamController<Uint8List> controller;
     bool cancelled = false;
     final worker = _pickWorker(); // pin for entire stream
 
-    controller = StreamController<List<int>>(
+    controller = StreamController<Uint8List>(
       onCancel: () { cancelled = true; },
       onListen: () async {
         try {
@@ -178,10 +228,10 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
               'length': chunkSize,
             });
             if (cancelled) break;
-            if (result is! Map || result['bytes'] is! List || result['totalSize'] is! num) {
+            if (result is! Map || result['totalSize'] is! num) {
               throw DbasFileSystemException('Unexpected response from worker for readFileChunk', path: path);
             }
-            final bytes = (result['bytes'] as List).cast<num>().map((e) => e.toInt()).toList();
+            final bytes = _extractBytes(result);
             if (bytes.isEmpty) break;
             controller.add(bytes);
             offset += bytes.length;
@@ -190,7 +240,7 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
         } catch (e) {
           if (!cancelled) controller.addError(e);
         } finally {
-          if (!controller.isClosed) await controller.close();
+          if (!controller.isClosed) controller.close();
         }
       },
     );
@@ -239,37 +289,6 @@ class DbasFileSystemNativeWeb extends DbasFileSystemNativeInterface {
       return DateTime.fromMillisecondsSinceEpoch(result.toInt(), isUtc: true);
     }
     throw DbasFileSystemException('Unexpected response from worker for getLastModified', path: path);
-  }
-
-  // ── Bulk operations ───────────────────────────────────────────────────
-
-  @override
-  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) async {
-    await ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFile(e.key, e.value)),
-      maxConcurrency: maxConcurrency,
-    );
-  }
-
-  @override
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) async {
-    await ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFileStream(e.key, e.value)),
-      maxConcurrency: maxConcurrency,
-    );
-  }
-
-  @override
-  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
-    final result = <String, List<int>>{};
-    final entries = await ConcurrencyPool.runAll(
-      paths.map((p) => () async => MapEntry(p, await readFile(p))),
-      maxConcurrency: maxConcurrency,
-    );
-    for (final entry in entries) {
-      result[entry.key] = entry.value;
-    }
-    return result;
   }
 
   // ── Directory operations ──────────────────────────────────────────────

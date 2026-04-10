@@ -9,7 +9,7 @@ Future<String> getAppFilePathImpl(String fileName, bool isTest) async {
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
-    return path.join(filePath, fileName);
+    return path.join(filePath, fileName).replaceAll('\\', '/');
   }
 
   final directory = await getApplicationSupportDirectory();
@@ -19,5 +19,5 @@ Future<String> getAppFilePathImpl(String fileName, bool isTest) async {
   if (!await dir.exists()) {
     await dir.create(recursive: true);
   }
-  return path.join(dirPath, fileName);
+  return path.join(dirPath, fileName).replaceAll('\\', '/');
 }

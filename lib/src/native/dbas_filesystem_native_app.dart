@@ -1,18 +1,20 @@
 import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
-import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'dbas_filesystem_native_interface.dart';
 
 class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   @override
-  Future<void> initialize({int workerPoolSize = 4}) async {
-    // No initialization needed for dart:io
-  }
+  Future<void> initialize({int workerPoolSize = 4}) async {}
+
+  @override
+  Future<void> dispose() async {}
 
   // ── Single file operations ────────────────────────────────────────────
 
   @override
-  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true}) async {
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) async {
     final file = File(path);
     if (!overwrite && await file.exists()) {
       throw FileAlreadyExistsException(path);
@@ -22,8 +24,11 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<void> writeFileStream(String path, Stream<List<int>> stream) async {
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) async {
     final file = File(path);
+    if (!overwrite && await file.exists()) {
+      throw FileAlreadyExistsException(path);
+    }
     await file.parent.create(recursive: true);
     final sink = file.openWrite();
     try {
@@ -37,7 +42,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Future<List<int>> readFile(String path) async {
+  Future<Uint8List> readFile(String path) async {
     try {
       return await File(path).readAsBytes();
     } on FileSystemException catch (e) {
@@ -47,8 +52,8 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   }
 
   @override
-  Stream<List<int>> readFileStream(String path, {int chunkSize = 65536}) {
-    return File(path).openRead().handleError((e) {
+  Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
+    return File(path).openRead().map((chunk) => Uint8List.fromList(chunk)).handleError((e) {
       if (e is FileSystemException) _throwIfNotFound(e, path);
       throw e;
     });
@@ -91,8 +96,24 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
       // EXDEV = 18 (Linux/macOS), ERROR_NOT_SAME_DEVICE = 17 (Windows)
       final code = e.osError?.errorCode;
       if (code == 18 || code == 17) {
-        await copyFile(sourcePath, destPath);
-        await source.delete();
+        try {
+          await copyFile(sourcePath, destPath);
+        } catch (_) {
+          // Clean up partial destination on copy failure
+          if (await dest.exists()) {
+            try { await dest.delete(); } catch (_) {}
+          }
+          rethrow;
+        }
+        try {
+          await source.delete();
+        } catch (_) {
+          // Source delete failed — roll back destination to avoid duplicates
+          if (await dest.exists()) {
+            try { await dest.delete(); } catch (_) {}
+          }
+          rethrow;
+        }
       } else {
         _throwIfNotFound(e, sourcePath);
         rethrow;
@@ -134,37 +155,6 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     }
   }
 
-  // ── Bulk operations ───────────────────────────────────────────────────
-
-  @override
-  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) async {
-    await ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFile(e.key, e.value)),
-      maxConcurrency: maxConcurrency,
-    );
-  }
-
-  @override
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) async {
-    await ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFileStream(e.key, e.value)),
-      maxConcurrency: maxConcurrency,
-    );
-  }
-
-  @override
-  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
-    final result = <String, List<int>>{};
-    final entries = await ConcurrencyPool.runAll(
-      paths.map((p) => () async => MapEntry(p, await readFile(p))),
-      maxConcurrency: maxConcurrency,
-    );
-    for (final entry in entries) {
-      result[entry.key] = entry.value;
-    }
-    return result;
-  }
-
   // ── Directory operations ──────────────────────────────────────────────
 
   @override
@@ -181,7 +171,7 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   Future<List<String>> listDirectory(String path) async {
     try {
       final entities = await Directory(path).list().toList();
-      return entities.map((e) => e.path).toList();
+      return entities.map((e) => e.path.replaceAll('\\', '/')).toList();
     } on FileSystemException catch (e) {
       _throwIfDirNotFound(e, path);
       rethrow;

@@ -70,7 +70,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
       if (await _fs!.directoryExists(_basePath)) {
         final paths = await _fs!.listDirectory(_basePath);
         for (final path in paths) {
-          final name = path.split('/').last.split('\\').last;
+          final name = path.split('/').last;
           int size = 0;
           await for (final chunk in _fs!.readFileStream(path)) {
             size += chunk.length;
@@ -129,7 +129,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
     final name = nameController.text.trim();
     if (name.isEmpty) return;
 
-    final bytes = utf8.encode(controller.text);
+    final bytes = Uint8List.fromList(utf8.encode(controller.text));
     final path = await _fs!.getAppFilePath(name);
     await _fs!.writeFile(path, bytes);
     await _refreshFiles();
@@ -262,7 +262,7 @@ class _FileSystemDemoState extends State<FileSystemDemo> {
   Future<void> _downloadFile(_FileEntry entry) async {
     try {
       final content = await _fs!.readFile(entry.path);
-      final success = await downloadFile(entry.name, Uint8List.fromList(content));
+      final success = await downloadFile(entry.name, content);
       if (!mounted) return;
       if (success) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -34,20 +34,21 @@ void main() {
     await fs.writeFile(filePath, bytes);
     final result = await fs.readFile(filePath);
 
-    expect(result, equals([1, 2, 3, 4, 5]));
+    expect(result, isA<Uint8List>());
+    expect(result, equals(Uint8List.fromList([1, 2, 3, 4, 5])));
   });
 
   test('fileExists', () async {
     final filePath = '$testDir/exists_test.bin';
     expect(await fs.fileExists(filePath), isFalse);
 
-    await fs.writeFile(filePath, [10, 20]);
+    await fs.writeFile(filePath, Uint8List.fromList([10, 20]));
     expect(await fs.fileExists(filePath), isTrue);
   });
 
   test('deleteFile', () async {
     final filePath = '$testDir/delete_test.bin';
-    await fs.writeFile(filePath, [1, 2, 3]);
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
     expect(await fs.fileExists(filePath), isTrue);
 
     await fs.deleteFile(filePath);
@@ -69,7 +70,8 @@ void main() {
     await fs.writeFileStream(filePath, stream);
     final result = await fs.readFile(filePath);
 
-    expect(result, equals([1, 2, 3, 4, 5, 6]));
+    expect(result, isA<Uint8List>());
+    expect(result, equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
   });
 
   test('readFileStream', () async {
@@ -79,6 +81,7 @@ void main() {
 
     final readBytes = <int>[];
     await for (final chunk in fs.readFileStream(filePath)) {
+      expect(chunk, isA<Uint8List>());
       readBytes.addAll(chunk);
     }
 
@@ -88,7 +91,7 @@ void main() {
   test('copyFile', () async {
     final sourcePath = '$testDir/copy_source.bin';
     final destPath = '$testDir/copy_dest.bin';
-    final bytes = [10, 20, 30, 40, 50];
+    final bytes = Uint8List.fromList([10, 20, 30, 40, 50]);
 
     await fs.writeFile(sourcePath, bytes);
     await fs.copyFile(sourcePath, destPath);
@@ -100,7 +103,7 @@ void main() {
   test('moveFile', () async {
     final sourcePath = '$testDir/move_source.bin';
     final destPath = '$testDir/move_dest.bin';
-    final bytes = [10, 20, 30];
+    final bytes = Uint8List.fromList([10, 20, 30]);
 
     await fs.writeFile(sourcePath, bytes);
     await fs.moveFile(sourcePath, destPath);
@@ -114,27 +117,66 @@ void main() {
 
   test('writeFile with overwrite: true overwrites existing file', () async {
     final filePath = '$testDir/overwrite_test.bin';
-    await fs.writeFile(filePath, [1, 2, 3]);
-    await fs.writeFile(filePath, [4, 5, 6], overwrite: true);
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
+    await fs.writeFile(filePath, Uint8List.fromList([4, 5, 6]), overwrite: true);
 
-    expect(await fs.readFile(filePath), equals([4, 5, 6]));
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([4, 5, 6])));
   });
 
   test('writeFile with overwrite: false throws FileAlreadyExistsException', () async {
     final filePath = '$testDir/overwrite_false_test.bin';
-    await fs.writeFile(filePath, [1, 2, 3]);
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
 
     await expectLater(
-      () => fs.writeFile(filePath, [4, 5, 6], overwrite: false),
+      () => fs.writeFile(filePath, Uint8List.fromList([4, 5, 6]), overwrite: false),
       throwsA(isA<FileAlreadyExistsException>()),
     );
   });
 
   test('writeFile with overwrite: false succeeds on new file', () async {
     final filePath = '$testDir/overwrite_new.bin';
-    await fs.writeFile(filePath, [1, 2, 3], overwrite: false);
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]), overwrite: false);
 
-    expect(await fs.readFile(filePath), equals([1, 2, 3]));
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3])));
+  });
+
+  // ── writeFileStream overwrite ─────────────────────────────────────────
+
+  test('writeFileStream with overwrite: true overwrites existing file', () async {
+    final filePath = '$testDir/stream_overwrite_test.bin';
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
+    await fs.writeFileStream(
+      filePath,
+      Stream.fromIterable([Uint8List.fromList([4, 5, 6])]),
+      overwrite: true,
+    );
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([4, 5, 6])));
+  });
+
+  test('writeFileStream with overwrite: false throws FileAlreadyExistsException', () async {
+    final filePath = '$testDir/stream_overwrite_false.bin';
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
+
+    await expectLater(
+      () => fs.writeFileStream(
+        filePath,
+        Stream.fromIterable([Uint8List.fromList([4, 5, 6])]),
+        overwrite: false,
+      ),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+  });
+
+  test('writeFileStream with overwrite: false succeeds on new file', () async {
+    final filePath = '$testDir/stream_overwrite_new.bin';
+    await fs.writeFileStream(
+      filePath,
+      Stream.fromIterable([Uint8List.fromList([1, 2, 3])]),
+      overwrite: false,
+    );
+
+    expect(await fs.readFile(filePath), equals(Uint8List.fromList([1, 2, 3])));
   });
 
   // ── File metadata ─────────────────────────────────────────────────────
@@ -158,7 +200,7 @@ void main() {
   test('getLastModified returns recent DateTime', () async {
     final filePath = '$testDir/modified_test.bin';
     final before = DateTime.now().toUtc().subtract(const Duration(seconds: 2));
-    await fs.writeFile(filePath, [1, 2, 3]);
+    await fs.writeFile(filePath, Uint8List.fromList([1, 2, 3]));
     final after = DateTime.now().toUtc().add(const Duration(seconds: 2));
 
     final modified = await fs.getLastModified(filePath);
@@ -178,7 +220,7 @@ void main() {
   test('renameFile moves content and removes old path', () async {
     final oldPath = '$testDir/rename_old.bin';
     final newPath = '$testDir/rename_new.bin';
-    final bytes = [10, 20, 30];
+    final bytes = Uint8List.fromList([10, 20, 30]);
 
     await fs.writeFile(oldPath, bytes);
     await fs.renameFile(oldPath, newPath);
@@ -200,15 +242,15 @@ void main() {
     final newDir = '$testDir/rename_dir_new';
 
     await fs.createDirectory(oldDir);
-    await fs.writeFile('$oldDir/a.bin', [1, 2]);
-    await fs.writeFile('$oldDir/b.bin', [3, 4]);
+    await fs.writeFile('$oldDir/a.bin', Uint8List.fromList([1, 2]));
+    await fs.writeFile('$oldDir/b.bin', Uint8List.fromList([3, 4]));
 
     await fs.renameDirectory(oldDir, newDir);
 
     expect(await fs.directoryExists(oldDir), isFalse);
     expect(await fs.directoryExists(newDir), isTrue);
-    expect(await fs.readFile('$newDir/a.bin'), equals([1, 2]));
-    expect(await fs.readFile('$newDir/b.bin'), equals([3, 4]));
+    expect(await fs.readFile('$newDir/a.bin'), equals(Uint8List.fromList([1, 2])));
+    expect(await fs.readFile('$newDir/b.bin'), equals(Uint8List.fromList([3, 4])));
   });
 
   test('renameDirectory throws DirectoryNotFoundException for missing source', () async {
@@ -222,24 +264,27 @@ void main() {
 
   test('writeFiles and readFiles (bulk)', () async {
     final files = {
-      '$testDir/bulk_1.bin': <int>[1, 2, 3],
-      '$testDir/bulk_2.bin': <int>[4, 5, 6],
-      '$testDir/bulk_3.bin': <int>[7, 8, 9],
+      '$testDir/bulk_1.bin': Uint8List.fromList([1, 2, 3]),
+      '$testDir/bulk_2.bin': Uint8List.fromList([4, 5, 6]),
+      '$testDir/bulk_3.bin': Uint8List.fromList([7, 8, 9]),
     };
 
     await fs.writeFiles(files);
     final result = await fs.readFiles(files.keys.toList());
 
     expect(result.length, equals(3));
-    expect(result['$testDir/bulk_1.bin'], equals([1, 2, 3]));
-    expect(result['$testDir/bulk_2.bin'], equals([4, 5, 6]));
-    expect(result['$testDir/bulk_3.bin'], equals([7, 8, 9]));
+    for (final entry in result.entries) {
+      expect(entry.value, isA<Uint8List>());
+    }
+    expect(result['$testDir/bulk_1.bin'], equals(Uint8List.fromList([1, 2, 3])));
+    expect(result['$testDir/bulk_2.bin'], equals(Uint8List.fromList([4, 5, 6])));
+    expect(result['$testDir/bulk_3.bin'], equals(Uint8List.fromList([7, 8, 9])));
   });
 
   test('parallel bulk write with maxConcurrency', () async {
-    final files = <String, List<int>>{};
+    final files = <String, Uint8List>{};
     for (var i = 0; i < 20; i++) {
-      files['$testDir/parallel_$i.bin'] = List.generate(10, (j) => i + j);
+      files['$testDir/parallel_$i.bin'] = Uint8List.fromList(List.generate(10, (j) => i + j));
     }
 
     await fs.writeFiles(files, maxConcurrency: 5);
@@ -251,10 +296,10 @@ void main() {
   });
 
   test('parallel bulk read with maxConcurrency', () async {
-    final files = <String, List<int>>{};
+    final files = <String, Uint8List>{};
     for (var i = 0; i < 20; i++) {
       final path = '$testDir/par_read_$i.bin';
-      files[path] = List.generate(10, (j) => i + j);
+      files[path] = Uint8List.fromList(List.generate(10, (j) => i + j));
       await fs.writeFile(path, files[path]!);
     }
 
@@ -276,22 +321,27 @@ void main() {
     expect(await fs.directoryExists(dirPath), isTrue);
   });
 
-  test('listDirectory', () async {
+  test('listDirectory returns normalized forward-slash paths', () async {
     final dirPath = '$testDir/list_test';
     await fs.createDirectory(dirPath);
-    await fs.writeFile('$dirPath/a.bin', [1]);
-    await fs.writeFile('$dirPath/b.bin', [2]);
+    await fs.writeFile('$dirPath/a.bin', Uint8List.fromList([1]));
+    await fs.writeFile('$dirPath/b.bin', Uint8List.fromList([2]));
 
     final entries = await fs.listDirectory(dirPath);
-    final names = entries.map((e) => e.split('/').last.split('\\').last).toList()..sort();
 
+    // All paths should use forward slashes
+    for (final entry in entries) {
+      expect(entry.contains('\\'), isFalse, reason: 'Path should be normalized: $entry');
+    }
+
+    final names = entries.map((e) => e.split('/').last).toList()..sort();
     expect(names, equals(['a.bin', 'b.bin']));
   });
 
   test('deleteDirectory', () async {
     final dirPath = '$testDir/delete_dir';
     await fs.createDirectory(dirPath);
-    await fs.writeFile('$dirPath/file.bin', [1]);
+    await fs.writeFile('$dirPath/file.bin', Uint8List.fromList([1]));
 
     await fs.deleteDirectory(dirPath, recursive: true);
     expect(await fs.directoryExists(dirPath), isFalse);
@@ -300,7 +350,7 @@ void main() {
   test('deleteDirectory non-recursive throws DirectoryNotEmptyException', () async {
     final dirPath = '$testDir/nonempty_dir';
     await fs.createDirectory(dirPath);
-    await fs.writeFile('$dirPath/file.bin', [1]);
+    await fs.writeFile('$dirPath/file.bin', Uint8List.fromList([1]));
 
     await expectLater(
       () => fs.deleteDirectory(dirPath, recursive: false),

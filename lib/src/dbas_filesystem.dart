@@ -4,6 +4,7 @@ import 'package:dbas_filesystem/src/dbas_filesystem_platform.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_platform_util.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_io.dart'
   if (dart.library.js_interop) 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_web.dart';
+import 'package:flutter/foundation.dart';
 
 class DbasFileSystem {
   static DbasFileSystem? _instance;
@@ -18,7 +19,7 @@ class DbasFileSystem {
 
     _initCompleter = Completer<DbasFileSystem>();
     try {
-      final platform = await DbasFileSystemPlatform.getInstance(workerPoolSize: workerPoolSize);
+      final platform = await DbasFileSystemPlatform.create(workerPoolSize: workerPoolSize);
       _instance = DbasFileSystem._(platform);
       _initCompleter!.complete(_instance!);
       return _instance!;
@@ -29,6 +30,17 @@ class DbasFileSystem {
     }
   }
 
+  /// Disposes the singleton and releases all resources (e.g. web workers).
+  /// After calling dispose, [getInstance] will create a fresh instance.
+  /// Callers holding old references will get [StateError] on subsequent calls.
+  Future<void> dispose() async {
+    // Null out singleton first so concurrent getInstance() calls don't
+    // return the being-disposed instance.
+    _instance = null;
+    _initCompleter = null;
+    await _platform.dispose();
+  }
+
   // ── Path helpers ──────────────────────────────────────────────────────
 
   Future<String> getAppFilePath(String fileName) =>
@@ -36,16 +48,16 @@ class DbasFileSystem {
 
   // ── Single file operations ────────────────────────────────────────────
 
-  Future<void> writeFile(String filePath, List<int> bytes, {bool overwrite = true}) =>
+  Future<void> writeFile(String filePath, Uint8List bytes, {bool overwrite = true}) =>
       _platform.writeFile(filePath, bytes, overwrite: overwrite);
 
-  Future<void> writeFileStream(String filePath, Stream<List<int>> stream) =>
-      _platform.writeFileStream(filePath, stream);
+  Future<void> writeFileStream(String filePath, Stream<List<int>> stream, {bool overwrite = true}) =>
+      _platform.writeFileStream(filePath, stream, overwrite: overwrite);
 
-  Future<List<int>> readFile(String filePath) =>
+  Future<Uint8List> readFile(String filePath) =>
       _platform.readFile(filePath);
 
-  Stream<List<int>> readFileStream(String filePath, {int chunkSize = 65536}) =>
+  Stream<Uint8List> readFileStream(String filePath, {int chunkSize = 65536}) =>
       _platform.readFileStream(filePath, chunkSize: chunkSize);
 
   Future<void> deleteFile(String filePath) =>
@@ -73,13 +85,13 @@ class DbasFileSystem {
 
   // ── Bulk operations ───────────────────────────────────────────────────
 
-  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) =>
+  Future<void> writeFiles(Map<String, Uint8List> files, {int maxConcurrency = 10}) =>
       _platform.writeFiles(files, maxConcurrency: maxConcurrency);
 
   Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) =>
       _platform.writeFilesStream(files, maxConcurrency: maxConcurrency);
 
-  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) =>
+  Future<Map<String, Uint8List>> readFiles(List<String> paths, {int maxConcurrency = 10}) =>
       _platform.readFiles(paths, maxConcurrency: maxConcurrency);
 
   // ── Directory operations ──────────────────────────────────────────────

@@ -1,53 +1,60 @@
 import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_path_lock.dart';
 import 'package:dbas_filesystem/src/native/dbas_filesystem_native_interface.dart';
 
 final class DbasFileSystemPlatform {
-  static DbasFileSystemPlatform? _instance;
-  static Completer<DbasFileSystemPlatform>? _initCompleter;
   final DbasFileSystemNativeInterface _delegate;
   final PathLock _lock = PathLock();
+  bool _disposed = false;
 
   DbasFileSystemPlatform._(this._delegate);
 
-  static Future<DbasFileSystemPlatform> getInstance({int workerPoolSize = 4}) async {
-    if (_instance != null) return _instance!;
-    if (_initCompleter != null) return _initCompleter!.future;
+  static Future<DbasFileSystemPlatform> create({int workerPoolSize = 4}) async {
+    final delegate = DbasFileSystemNativeInterface.getInstance();
+    await delegate.initialize(workerPoolSize: workerPoolSize);
+    return DbasFileSystemPlatform._(delegate);
+  }
 
-    _initCompleter = Completer<DbasFileSystemPlatform>();
-    try {
-      final delegate = DbasFileSystemNativeInterface.getInstance();
-      await delegate.initialize(workerPoolSize: workerPoolSize);
-      _instance = DbasFileSystemPlatform._(delegate);
-      _initCompleter!.complete(_instance!);
-      return _instance!;
-    } catch (e) {
-      _initCompleter!.completeError(e);
-      _initCompleter = null;
-      rethrow;
-    }
+  void _checkNotDisposed() {
+    if (_disposed) throw StateError('DbasFileSystem has been disposed.');
+  }
+
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await _delegate.dispose();
+    DbasFileSystemNativeInterface.resetInstance();
   }
 
   // ── Single file operations ────────────────────────────────────────────
 
-  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true}) =>
-      _lock.synchronized(path, () => _delegate.writeFile(path, bytes, overwrite: overwrite));
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true}) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.writeFile(path, bytes, overwrite: overwrite));
+  }
 
-  Future<void> writeFileStream(String path, Stream<List<int>> stream) =>
-      _lock.synchronized(path, () => _delegate.writeFileStream(path, stream));
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true}) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.writeFileStream(path, stream, overwrite: overwrite));
+  }
 
-  Future<List<int>> readFile(String path) =>
-      _lock.synchronized(path, () => _delegate.readFile(path));
+  Future<Uint8List> readFile(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.readFile(path));
+  }
 
-  Stream<List<int>> readFileStream(String path, {int chunkSize = 65536}) {
-    late StreamController<List<int>> controller;
-    Future<void>? lockFuture;
+  Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
+    _checkNotDisposed();
+    late StreamController<Uint8List> controller;
+    final lockCompleter = Completer<void>();
     bool cancelled = false;
 
-    controller = StreamController<List<int>>(
+    controller = StreamController<Uint8List>(
       onListen: () {
-        lockFuture = _lock.synchronized(path, () async {
+        _lock.synchronized(path, () async {
           await for (final chunk in _delegate.readFileStream(path, chunkSize: chunkSize)) {
             if (cancelled || controller.isClosed) break;
             controller.add(chunk);
@@ -56,56 +63,74 @@ final class DbasFileSystemPlatform {
           if (!cancelled && !controller.isClosed) controller.addError(e);
         }).whenComplete(() {
           if (!controller.isClosed) controller.close();
+          lockCompleter.complete();
         });
       },
       onCancel: () {
         cancelled = true;
-        return lockFuture;
+        return lockCompleter.future;
       },
     );
     return controller.stream;
   }
 
-  Future<void> deleteFile(String path) =>
-      _lock.synchronized(path, () => _delegate.deleteFile(path));
+  Future<void> deleteFile(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.deleteFile(path));
+  }
 
-  Future<bool> fileExists(String path) =>
-      _lock.synchronized(path, () => _delegate.fileExists(path));
+  Future<bool> fileExists(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.fileExists(path));
+  }
 
-  Future<void> copyFile(String sourcePath, String destPath) =>
-      _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.copyFile(sourcePath, destPath));
+  Future<void> copyFile(String sourcePath, String destPath) {
+    _checkNotDisposed();
+    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.copyFile(sourcePath, destPath));
+  }
 
-  Future<void> moveFile(String sourcePath, String destPath) =>
-      _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.moveFile(sourcePath, destPath));
+  Future<void> moveFile(String sourcePath, String destPath) {
+    _checkNotDisposed();
+    return _lock.synchronizedMulti([sourcePath, destPath], () => _delegate.moveFile(sourcePath, destPath));
+  }
 
-  Future<void> renameFile(String oldPath, String newPath) =>
-      _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameFile(oldPath, newPath));
+  Future<void> renameFile(String oldPath, String newPath) {
+    _checkNotDisposed();
+    return _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameFile(oldPath, newPath));
+  }
 
   // ── File metadata ─────────────────────────────────────────────────────
 
-  Future<int> getFileSize(String path) =>
-      _lock.synchronized(path, () => _delegate.getFileSize(path));
+  Future<int> getFileSize(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.getFileSize(path));
+  }
 
-  Future<DateTime> getLastModified(String path) =>
-      _lock.synchronized(path, () => _delegate.getLastModified(path));
+  Future<DateTime> getLastModified(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.getLastModified(path));
+  }
 
   // ── Bulk operations ───────────────────────────────────────────────────
-  // Bulk methods are orchestrated here to route through the locked
-  // single-file methods above, ensuring per-file PathLock is acquired.
 
-  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10}) =>
-      ConcurrencyPool.runAll(
-        files.entries.map((e) => () => writeFile(e.key, e.value)),
-        maxConcurrency: maxConcurrency,
-      );
+  Future<void> writeFiles(Map<String, Uint8List> files, {int maxConcurrency = 10}) {
+    _checkNotDisposed();
+    return ConcurrencyPool.runAll(
+      files.entries.map((e) => () => writeFile(e.key, e.value)),
+      maxConcurrency: maxConcurrency,
+    );
+  }
 
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) =>
-      ConcurrencyPool.runAll(
-        files.entries.map((e) => () => writeFileStream(e.key, e.value)),
-        maxConcurrency: maxConcurrency,
-      );
+  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10}) {
+    _checkNotDisposed();
+    return ConcurrencyPool.runAll(
+      files.entries.map((e) => () => writeFileStream(e.key, e.value)),
+      maxConcurrency: maxConcurrency,
+    );
+  }
 
-  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
+  Future<Map<String, Uint8List>> readFiles(List<String> paths, {int maxConcurrency = 10}) async {
+    _checkNotDisposed();
     final entries = await ConcurrencyPool.runAll(
       paths.map((p) => () async => MapEntry(p, await readFile(p))),
       maxConcurrency: maxConcurrency,
@@ -115,18 +140,28 @@ final class DbasFileSystemPlatform {
 
   // ── Directory operations ──────────────────────────────────────────────
 
-  Future<void> createDirectory(String path, {bool recursive = true}) =>
-      _delegate.createDirectory(path, recursive: recursive);
+  Future<void> createDirectory(String path, {bool recursive = true}) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.createDirectory(path, recursive: recursive));
+  }
 
-  Future<bool> directoryExists(String path) =>
-      _delegate.directoryExists(path);
+  Future<bool> directoryExists(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.directoryExists(path));
+  }
 
-  Future<List<String>> listDirectory(String path) =>
-      _delegate.listDirectory(path);
+  Future<List<String>> listDirectory(String path) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.listDirectory(path));
+  }
 
-  Future<void> deleteDirectory(String path, {bool recursive = false}) =>
-      _delegate.deleteDirectory(path, recursive: recursive);
+  Future<void> deleteDirectory(String path, {bool recursive = false}) {
+    _checkNotDisposed();
+    return _lock.synchronized(path, () => _delegate.deleteDirectory(path, recursive: recursive));
+  }
 
-  Future<void> renameDirectory(String oldPath, String newPath) =>
-      _delegate.renameDirectory(oldPath, newPath);
+  Future<void> renameDirectory(String oldPath, String newPath) {
+    _checkNotDisposed();
+    return _lock.synchronizedMulti([oldPath, newPath], () => _delegate.renameDirectory(oldPath, newPath));
+  }
 }

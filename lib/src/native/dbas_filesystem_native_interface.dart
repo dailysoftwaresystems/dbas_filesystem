@@ -12,6 +12,10 @@ abstract class DbasFileSystemNativeInterface {
     return _instance!;
   }
 
+  static void resetInstance() {
+    _instance = null;
+  }
+
   static DbasFileSystemNativeInterface _getPlatform() {
     if (kIsWeb) {
       return DbasFileSystemNativeWeb();
@@ -20,13 +24,14 @@ abstract class DbasFileSystemNativeInterface {
   }
 
   Future<void> initialize({int workerPoolSize = 4});
+  Future<void> dispose();
 
   // ── Single file operations ────────────────────────────────────────────
 
-  Future<void> writeFile(String path, List<int> bytes, {bool overwrite = true});
-  Future<void> writeFileStream(String path, Stream<List<int>> stream);
-  Future<List<int>> readFile(String path);
-  Stream<List<int>> readFileStream(String path, {int chunkSize = 65536});
+  Future<void> writeFile(String path, Uint8List bytes, {bool overwrite = true});
+  Future<void> writeFileStream(String path, Stream<List<int>> stream, {bool overwrite = true});
+  Future<Uint8List> readFile(String path);
+  Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536});
   Future<void> deleteFile(String path);
   Future<bool> fileExists(String path);
   Future<void> copyFile(String sourcePath, String destPath);
@@ -37,12 +42,6 @@ abstract class DbasFileSystemNativeInterface {
 
   Future<int> getFileSize(String path);
   Future<DateTime> getLastModified(String path);
-
-  // ── Bulk operations ───────────────────────────────────────────────────
-
-  Future<void> writeFiles(Map<String, List<int>> files, {int maxConcurrency = 10});
-  Future<void> writeFilesStream(Map<String, Stream<List<int>>> files, {int maxConcurrency = 10});
-  Future<Map<String, List<int>>> readFiles(List<String> paths, {int maxConcurrency = 10});
 
   // ── Directory operations ──────────────────────────────────────────────
 
