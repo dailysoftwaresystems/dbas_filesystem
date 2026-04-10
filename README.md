@@ -12,7 +12,7 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 - **Directory operations** &mdash; create, list, delete, rename, and existence check.
 - **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices. Partial destination is cleaned up on failure.
 - **Thread safety** &mdash; per-path locking for both files and directories. Concurrent operations on the same path are serialized; different paths proceed in parallel.
-- **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`.
+- **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`.
 - **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web.
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
@@ -100,7 +100,19 @@ await fs.writeFiles(fileMap, maxConcurrency: 10);
 
 // Read multiple files concurrently (returns Map<String, Uint8List>)
 final results = await fs.readFiles(paths, maxConcurrency: 10);
+
+// Handle individual failures without losing successful results
+final errors = <String, Object>{};
+final results = await fs.readFiles(
+  paths,
+  onError: (path, error) => errors[path] = error,
+);
+// results contains only successful reads; errors contains the failures
 ```
+
+> **Memory note**: `readFiles` and `writeFiles` hold all file contents in
+> memory simultaneously, bounded by `maxConcurrency`. For large files, prefer
+> `readFileStream` / `writeFileStream` individually to control memory usage.
 
 ### Rename, copy, and move
 
@@ -156,6 +168,8 @@ try {
   await fs.readFile('/nonexistent');
 } on FileNotFoundException catch (e) {
   print(e.path); // '/nonexistent'
+} on PermissionDeniedException catch (e) {
+  print('Access denied: ${e.path}');
 } on OperationCancelledException {
   print('Operation was cancelled');
 } on DbasFileSystemException catch (e) {
@@ -204,9 +218,9 @@ if (!fs.isPersistentStorage) {
 | `renameFile(oldPath, newPath)` | Renames a file (atomic on native, copy+delete on web). |
 | `getFileSize(path)` | Returns the file size in bytes. |
 | `getLastModified(path)` | Returns the last modified timestamp (UTC). |
-| `writeFiles(files, {maxConcurrency, cancellationToken})` | Writes multiple files concurrently (not atomic). |
-| `writeFilesStream(files, {maxConcurrency, cancellationToken})` | Writes multiple files from streams concurrently (not atomic). |
-| `readFiles(paths, {maxConcurrency, cancellationToken})` | Reads multiple files concurrently (not atomic). |
+| `writeFiles(files, {maxConcurrency, cancellationToken, onError})` | Writes multiple files concurrently (not atomic). |
+| `writeFilesStream(files, {maxConcurrency, cancellationToken, onError})` | Writes multiple files from streams concurrently (not atomic). |
+| `readFiles(paths, {maxConcurrency, cancellationToken, onError})` | Reads multiple files concurrently (not atomic). With `onError`, failed files are omitted from the result. |
 | `createDirectory(path, {recursive})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
 | `listDirectory(path)` | Lists entries in a directory (forward-slash paths). |
@@ -244,7 +258,7 @@ If you need atomic semantics, perform writes individually and implement your own
 |-----------|---------|---------------|
 | `workerPoolSize` | 4 | Increase for web apps doing heavy parallel I/O. Each worker is a Web Worker thread. On native, this is ignored. |
 | `maxConcurrency` | 10 | Lower if bulk operations cause memory pressure (many large files). Raise if I/O is the bottleneck and files are small. |
-| `chunkSize` | 64 KB | Increase for large file streaming (e.g. 256 KB or 1 MB). Decrease for memory-constrained environments. Only affects web `readFileStream`. |
+| `chunkSize` | 64 KB | Increase for large file streaming (e.g. 256 KB or 1 MB). Decrease for memory-constrained environments. Affects `readFileStream` on all platforms. |
 
 ## Migrating from v1.x to v2.x
 

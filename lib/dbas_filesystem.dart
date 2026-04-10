@@ -6,5 +6,6 @@ export 'src/dbas_filesystem_exceptions.dart'
         DirectoryNotFoundException,
         FileAlreadyExistsException,
         DirectoryNotEmptyException,
-        OperationCancelledException;
+        OperationCancelledException,
+        PermissionDeniedException;
 export 'src/helpers/dbas_cancellation_token.dart' show CancellationToken;

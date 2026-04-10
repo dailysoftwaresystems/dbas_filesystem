@@ -35,3 +35,8 @@ final class OperationCancelledException extends DbasFileSystemException {
   const OperationCancelledException()
       : super('Operation was cancelled');
 }
+
+final class PermissionDeniedException extends DbasFileSystemException {
+  const PermissionDeniedException(String path)
+      : super('Permission denied', path: path);
+}

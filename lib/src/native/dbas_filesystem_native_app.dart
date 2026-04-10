@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -56,12 +57,48 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
 
   @override
   Stream<Uint8List> readFileStream(String path, {int chunkSize = 65536}) {
-    return File(path).openRead().map((chunk) {
-      return chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
-    }).handleError((e) {
-      if (e is FileSystemException) _throwIfNotFound(e, path);
-      throw e;
-    });
+    late StreamController<Uint8List> controller;
+    bool cancelled = false;
+    Completer<void>? pauseCompleter;
+
+    controller = StreamController<Uint8List>(
+      onPause: () { pauseCompleter = Completer<void>(); },
+      onResume: () {
+        pauseCompleter?.complete();
+        pauseCompleter = null;
+      },
+      onCancel: () {
+        cancelled = true;
+        pauseCompleter?.complete();
+        pauseCompleter = null;
+      },
+      onListen: () async {
+        RandomAccessFile? raf;
+        try {
+          try {
+            raf = await File(path).open();
+          } on FileSystemException catch (e) {
+            _throwIfNotFound(e, path);
+            rethrow;
+          }
+          while (!cancelled) {
+            final pc = pauseCompleter;
+            if (pc != null) await pc.future;
+            if (cancelled) break;
+            final chunk = await raf.read(chunkSize);
+            if (chunk.isEmpty || cancelled) break;
+            controller.add(chunk);
+            if (chunk.length < chunkSize) break;
+          }
+        } catch (e) {
+          if (!cancelled && !controller.isClosed) controller.addError(e);
+        } finally {
+          try { await raf?.close(); } catch (_) {}
+          if (!controller.isClosed) controller.close();
+        }
+      },
+    );
+    return controller.stream;
   }
 
   @override
@@ -81,15 +118,23 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
   Future<void> copyFile(String sourcePath, String destPath) async {
     final destFile = File(destPath);
     final destExisted = await destFile.exists();
+    var succeeded = false;
+    await destFile.parent.create(recursive: true);
+    final writer = destFile.openWrite();
     try {
-      await destFile.parent.create(recursive: true);
-      await File(sourcePath).openRead().pipe(destFile.openWrite());
-    } on FileSystemException catch (e) {
-      if (!destExisted && await destFile.exists()) {
-        try { await destFile.delete(); } catch (_) {}
+      await for (final chunk in File(sourcePath).openRead()) {
+        writer.add(chunk);
       }
+      await writer.flush();
+      succeeded = true;
+    } on FileSystemException catch (e) {
       _throwIfNotFound(e, sourcePath);
       rethrow;
+    } finally {
+      try { await writer.close(); } catch (_) {}
+      if (!succeeded && !destExisted) {
+        try { await destFile.delete(); } catch (_) {}
+      }
     }
   }
 
@@ -220,10 +265,14 @@ class DbasFileSystemNativeApp extends DbasFileSystemNativeInterface {
     final code = e.osError?.errorCode;
     // ENOENT = 2 (Linux/macOS/Windows)
     if (code == 2) throw FileNotFoundException(path);
+    // EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
+    if (code == 13 || code == 5) throw PermissionDeniedException(path);
   }
 
   static void _throwIfDirNotFound(FileSystemException e, String path) {
     final code = e.osError?.errorCode;
     if (code == 2) throw DirectoryNotFoundException(path);
+    // EACCES = 13 (Linux/macOS), ERROR_ACCESS_DENIED = 5 (Windows)
+    if (code == 13 || code == 5) throw PermissionDeniedException(path);
   }
 }

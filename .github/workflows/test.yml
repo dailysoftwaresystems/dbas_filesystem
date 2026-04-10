@@ -23,6 +23,9 @@ jobs:
         echo "VERSION=$version" >> $GITHUB_ENV
     - name: Get Flutter dependencies
       run: flutter pub get
+    - name: Get example dependencies
+      working-directory: example
+      run: flutter pub get
     - name: Analyze code
       run: flutter analyze
     - name: Run native tests

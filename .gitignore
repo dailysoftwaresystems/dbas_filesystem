@@ -20,6 +20,7 @@
 .history
 test/db
 *.DS_Store
+.plans/
 
 # Flutter repo-specific
 /bin/cache/

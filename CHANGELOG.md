@@ -1,3 +1,25 @@
+## 2.2.0
+
+### New features
+
+* **`onError` callback for bulk operations**: `readFiles`, `writeFiles`, and `writeFilesStream` now accept an optional `onError` callback. When provided, individual failures invoke the callback instead of throwing — successful results are still returned. `OperationCancelledException` always propagates regardless of `onError`.
+* **`PermissionDeniedException`**: New typed exception for permission-denied errors. Maps `EACCES` (13) on Linux/macOS and `ERROR_ACCESS_DENIED` (5) on Windows to a typed exception instead of surfacing raw `FileSystemException`.
+* **`chunkSize` honored on native**: `readFileStream` now respects the `chunkSize` parameter on all platforms (previously only affected web). Uses `RandomAccessFile` for precise chunk-level control with backpressure support — slow consumers no longer cause unbounded memory growth.
+
+### Fixes
+
+* **`copyFile` robustness**: Replaced fragile `pipe()` with a manual read/write loop and `try/finally` pattern. The writer is always closed, and partial destination files are cleaned up on failure (including on Windows where file handles must be released before deletion).
+* **`getInstance()` hardening**: The `_initCompleter` is now captured into a local variable before accessing `.future`, eliminating a theoretical race if `dispose()` clears it between the null-check and usage. Error cleanup uses `identical()` to avoid stomping a concurrent re-initialization.
+
+### Improvements
+
+* **Memory guidance**: `readFiles`, `writeFiles`, and `writeFilesStream` doc comments now document memory implications. README adds guidance on when to use bulk APIs vs streaming.
+* **Removed unused dependency**: `plugin_platform_interface` was listed in `pubspec.yaml` but never imported. Removed.
+
+### Tests
+
+* 12 new tests: `chunkSize` honoring (3 tests), `PermissionDeniedException` hierarchy, `copyFile` partial cleanup, `onError` callback (4 tests), `getInstance` hardening, backwards compatibility.
+
 ## 2.1.0
 
 ### New features

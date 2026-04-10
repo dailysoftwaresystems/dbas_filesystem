@@ -28,17 +28,19 @@ class DbasFileSystem {
   /// not supported on web).
   static Future<DbasFileSystem> getInstance({int workerPoolSize = 4}) async {
     if (_instance != null) return _instance!;
-    if (_initCompleter != null) return _initCompleter!.future;
+    final existing = _initCompleter;
+    if (existing != null) return existing.future;
 
-    _initCompleter = Completer<DbasFileSystem>();
+    final completer = Completer<DbasFileSystem>();
+    _initCompleter = completer;
     try {
       final platform = await DbasFileSystemPlatform.create(workerPoolSize: workerPoolSize);
       _instance = DbasFileSystem._(platform);
-      _initCompleter!.complete(_instance!);
+      completer.complete(_instance!);
       return _instance!;
     } catch (e) {
-      _initCompleter!.completeError(e);
-      _initCompleter = null;
+      completer.completeError(e);
+      if (identical(_initCompleter, completer)) _initCompleter = null;
       rethrow;
     }
   }
@@ -98,9 +100,8 @@ class DbasFileSystem {
 
   /// Reads the file at [filePath] as a stream of byte chunks.
   ///
-  /// On web, each chunk is at most [chunkSize] bytes (default 64 KB).
-  /// On native platforms, chunk sizes are determined by the underlying I/O
-  /// system and [chunkSize] is not used.
+  /// Each chunk is at most [chunkSize] bytes (default 64 KB). The last chunk
+  /// may be smaller if the remaining file content is less than [chunkSize].
   /// Throws [FileNotFoundException] if the file does not exist.
   Stream<Uint8List> readFileStream(String filePath, {int chunkSize = 65536}) =>
       _platform.readFileStream(filePath, chunkSize: chunkSize);
@@ -156,21 +157,33 @@ class DbasFileSystem {
   /// Each entry in [files] maps a file path to its byte content.
   /// Per-path locking still applies — same-path operations serialize.
   ///
+  /// If [onError] is provided, individual write failures invoke the callback
+  /// instead of throwing. If [onError] is null (default), throws on the
+  /// first error.
+  ///
   /// If [cancellationToken] is provided and cancelled, tasks that have not
   /// yet started will throw [OperationCancelledException]. Tasks already in
   /// flight will run to completion.
   ///
   /// **Not atomic**: if one write fails, others may have already completed
   /// or still be in flight. No rollback is performed on partial failure.
+  ///
+  /// **Memory**: all [files] byte content must fit in memory simultaneously.
+  /// For large files, prefer [writeFileStream] individually.
   Future<void> writeFiles(
     Map<String, Uint8List> files, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) =>
-      _platform.writeFiles(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
+      _platform.writeFiles(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
 
   /// Writes multiple files from streams concurrently, bounded by
   /// [maxConcurrency].
+  ///
+  /// If [onError] is provided, individual write failures invoke the callback
+  /// instead of throwing. If [onError] is null (default), throws on the
+  /// first error.
   ///
   /// If [cancellationToken] is provided and cancelled, tasks that have not
   /// yet started will throw [OperationCancelledException]. Tasks already in
@@ -182,13 +195,17 @@ class DbasFileSystem {
     Map<String, Stream<List<int>>> files, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) =>
-      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
+      _platform.writeFilesStream(files, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
 
   /// Reads multiple files concurrently, bounded by [maxConcurrency].
   ///
   /// Returns a map from file path to byte content.
-  /// Throws [FileNotFoundException] if any file does not exist.
+  ///
+  /// If [onError] is provided, individual read failures invoke the callback
+  /// and the failed file is omitted from the result map. If [onError] is
+  /// null (default), throws on the first error (e.g. [FileNotFoundException]).
   ///
   /// If [cancellationToken] is provided and cancelled, tasks that have not
   /// yet started will throw [OperationCancelledException]. Tasks already in
@@ -196,12 +213,17 @@ class DbasFileSystem {
   ///
   /// **Not atomic**: if one read fails, others may have already completed
   /// or still be in flight.
+  ///
+  /// **Memory**: all file contents are held in memory simultaneously, bounded
+  /// only by [maxConcurrency]. For large files, prefer [readFileStream]
+  /// individually to control memory usage.
   Future<Map<String, Uint8List>> readFiles(
     List<String> paths, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) =>
-      _platform.readFiles(paths, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken);
+      _platform.readFiles(paths, maxConcurrency: maxConcurrency, cancellationToken: cancellationToken, onError: onError);
 
   // ── Directory operations ──────────────────────────────────────────────
 

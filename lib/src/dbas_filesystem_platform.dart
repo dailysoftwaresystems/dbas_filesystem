@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:dbas_filesystem/src/dbas_filesystem_exceptions.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_concurrency_pool.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_path_lock.dart';
@@ -115,9 +116,24 @@ final class DbasFileSystemPlatform {
     Map<String, Uint8List> files, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) {
+    if (onError == null) {
+      return ConcurrencyPool.runAll(
+        files.entries.map((e) => () => writeFile(e.key, e.value)),
+        maxConcurrency: maxConcurrency,
+        cancellationToken: cancellationToken,
+      );
+    }
     return ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFile(e.key, e.value)),
+      files.entries.map((e) => () async {
+        try {
+          await writeFile(e.key, e.value);
+        } catch (err) {
+          if (err is OperationCancelledException) rethrow;
+          onError(e.key, err);
+        }
+      }),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
@@ -127,9 +143,24 @@ final class DbasFileSystemPlatform {
     Map<String, Stream<List<int>>> files, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) {
+    if (onError == null) {
+      return ConcurrencyPool.runAll(
+        files.entries.map((e) => () => writeFileStream(e.key, e.value)),
+        maxConcurrency: maxConcurrency,
+        cancellationToken: cancellationToken,
+      );
+    }
     return ConcurrencyPool.runAll(
-      files.entries.map((e) => () => writeFileStream(e.key, e.value)),
+      files.entries.map((e) => () async {
+        try {
+          await writeFileStream(e.key, e.value);
+        } catch (err) {
+          if (err is OperationCancelledException) rethrow;
+          onError(e.key, err);
+        }
+      }),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
@@ -139,13 +170,35 @@ final class DbasFileSystemPlatform {
     List<String> paths, {
     int maxConcurrency = 10,
     CancellationToken? cancellationToken,
+    void Function(String path, Object error)? onError,
   }) async {
+    if (onError == null) {
+      final entries = await ConcurrencyPool.runAll(
+        paths.map((p) => () async => MapEntry(p, await readFile(p))),
+        maxConcurrency: maxConcurrency,
+        cancellationToken: cancellationToken,
+      );
+      return Map.fromEntries(entries);
+    }
+
     final entries = await ConcurrencyPool.runAll(
-      paths.map((p) => () async => MapEntry(p, await readFile(p))),
+      paths.map((p) => () async {
+        try {
+          return MapEntry<String, Uint8List?>(p, await readFile(p));
+        } catch (e) {
+          if (e is OperationCancelledException) rethrow;
+          onError(p, e);
+          return MapEntry<String, Uint8List?>(p, null);
+        }
+      }),
       maxConcurrency: maxConcurrency,
       cancellationToken: cancellationToken,
     );
-    return Map.fromEntries(entries);
+    final result = <String, Uint8List>{};
+    for (final e in entries) {
+      if (e.value != null) result[e.key] = e.value!;
+    }
+    return result;
   }
 
   // ── Directory operations ──────────────────────────────────────────────
