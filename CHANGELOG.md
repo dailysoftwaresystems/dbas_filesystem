@@ -1,3 +1,7 @@
+## 2.0.1
+
+* Updated README to reflect all 2.0.0 changes: `Uint8List` API in examples, `dispose()` lifecycle section, `writeFileStream` overwrite parameter, directory locking in thread safety docs, path normalization, and updated API reference table.
+
 ## 2.0.0
 
 ### Breaking changes

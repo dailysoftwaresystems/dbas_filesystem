@@ -6,15 +6,17 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 
 - **File operations** &mdash; read, write, copy, move, rename, delete, and existence check.
 - **File metadata** &mdash; get file size and last modified timestamp.
-- **Overwrite protection** &mdash; `writeFile` accepts an `overwrite` parameter to prevent accidental overwrites.
+- **Overwrite protection** &mdash; `writeFile` and `writeFileStream` accept an `overwrite` parameter to prevent accidental overwrites.
 - **Stream support** &mdash; stream-based read and write for memory-efficient large file handling.
 - **Parallel bulk operations** &mdash; read or write multiple files concurrently with configurable `maxConcurrency`.
 - **Directory operations** &mdash; create, list, delete, rename, and existence check.
-- **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices.
-- **Per-file thread safety** &mdash; concurrent operations on the same file are automatically serialized; different files proceed in parallel.
+- **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices. Partial destination is cleaned up on failure.
+- **Thread safety** &mdash; per-path locking for both files and directories. Concurrent operations on the same path are serialized; different paths proceed in parallel.
 - **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`.
 - **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web.
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
+- **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
+- **Lifecycle management** &mdash; `dispose()` releases all resources (terminates web workers, resets singleton).
 
 ## Platform Support
 
@@ -42,6 +44,7 @@ dependencies:
 ## Usage
 
 ```dart
+import 'dart:typed_data';
 import 'package:dbas_filesystem/dbas_filesystem.dart';
 
 final fs = await DbasFileSystem.getInstance();
@@ -53,13 +56,13 @@ final fs = await DbasFileSystem.getInstance();
 final path = await fs.getAppFilePath('example.txt');
 
 // Write
-await fs.writeFile(path, utf8.encode('Hello, world!'));
+await fs.writeFile(path, Uint8List.fromList(utf8.encode('Hello, world!')));
 
 // Write with overwrite protection
-await fs.writeFile(path, utf8.encode('data'), overwrite: false);
+await fs.writeFile(path, Uint8List.fromList(utf8.encode('data')), overwrite: false);
 // throws FileAlreadyExistsException if file exists
 
-// Read
+// Read (returns Uint8List)
 final bytes = await fs.readFile(path);
 print(utf8.decode(bytes));
 ```
@@ -74,15 +77,16 @@ final modified = await fs.getLastModified(path); // DateTime (UTC)
 ### Stream a large file
 
 ```dart
-// Write from stream
+// Write from stream (with overwrite protection)
 Stream<List<int>> chunks() async* {
   for (int i = 0; i < 100; i++) {
     yield Uint8List(65536); // 64 KB chunks
   }
 }
 await fs.writeFileStream(path, chunks());
+await fs.writeFileStream(path, chunks(), overwrite: false); // throws if exists
 
-// Read as stream
+// Read as stream (returns Stream<Uint8List>)
 await for (final chunk in fs.readFileStream(path)) {
   // process chunk
 }
@@ -94,7 +98,7 @@ await for (final chunk in fs.readFileStream(path)) {
 // Write 100 files with up to 10 concurrent writes
 await fs.writeFiles(fileMap, maxConcurrency: 10);
 
-// Read multiple files concurrently
+// Read multiple files concurrently (returns Map<String, Uint8List>)
 final results = await fs.readFiles(paths, maxConcurrency: 10);
 ```
 
@@ -111,8 +115,20 @@ await fs.moveFile(sourcePath, destPath);          // cross-device safe
 
 ```dart
 await fs.createDirectory(dirPath);
-final entries = await fs.listDirectory(dirPath);
+final entries = await fs.listDirectory(dirPath); // forward-slash paths on all platforms
 await fs.deleteDirectory(dirPath, recursive: true);
+```
+
+### Lifecycle management
+
+```dart
+// Release all resources (terminates web workers, resets singleton)
+await fs.dispose();
+
+// After dispose, getInstance() creates a fresh instance
+final freshFs = await DbasFileSystem.getInstance();
+
+// Calling methods on a disposed instance throws StateError
 ```
 
 ### Error handling
@@ -132,40 +148,41 @@ try {
 | Method | Description |
 |--------|-------------|
 | `getInstance({workerPoolSize})` | Returns the singleton `DbasFileSystem` instance. |
-| `getAppFilePath(fileName)` | Resolves a platform-specific path for the given file name. |
-| `writeFile(path, bytes, {overwrite})` | Writes a byte array to a file. |
-| `writeFileStream(path, stream)` | Writes a stream of byte chunks to a file. |
-| `readFile(path)` | Reads a file as a byte array. |
-| `readFileStream(path, {chunkSize})` | Reads a file as a stream of byte chunks. |
-| `deleteFile(path)` | Deletes a file. |
+| `dispose()` | Releases all resources and resets the singleton. |
+| `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). |
+| `writeFile(path, bytes, {overwrite})` | Writes a `Uint8List` to a file. |
+| `writeFileStream(path, stream, {overwrite})` | Writes a stream of byte chunks to a file. |
+| `readFile(path)` | Reads a file as a `Uint8List`. |
+| `readFileStream(path, {chunkSize})` | Reads a file as a `Stream<Uint8List>`. |
+| `deleteFile(path)` | Deletes a file (no-op if missing). |
 | `fileExists(path)` | Checks whether a file exists. |
 | `copyFile(source, dest)` | Copies a file. |
 | `moveFile(source, dest)` | Moves a file with cross-device fallback. |
 | `renameFile(oldPath, newPath)` | Renames a file (atomic on native, copy+delete on web). |
 | `getFileSize(path)` | Returns the file size in bytes. |
 | `getLastModified(path)` | Returns the last modified timestamp (UTC). |
-| `writeFiles(files, {maxConcurrency})` | Writes multiple files concurrently. |
+| `writeFiles(files, {maxConcurrency})` | Writes multiple files (`Map<String, Uint8List>`) concurrently. |
 | `writeFilesStream(files, {maxConcurrency})` | Writes multiple files from streams concurrently. |
-| `readFiles(paths, {maxConcurrency})` | Reads multiple files concurrently. |
+| `readFiles(paths, {maxConcurrency})` | Reads multiple files concurrently, returns `Map<String, Uint8List>`. |
 | `createDirectory(path, {recursive})` | Creates a directory. |
 | `directoryExists(path)` | Checks whether a directory exists. |
-| `listDirectory(path)` | Lists entries in a directory. |
+| `listDirectory(path)` | Lists entries in a directory (forward-slash paths). |
 | `deleteDirectory(path, {recursive})` | Deletes a directory. |
 | `renameDirectory(oldPath, newPath)` | Renames a directory (atomic on native, recursive copy+delete on web). |
 
 ## Thread Safety
 
-All operations are routed through a per-file lock (`PathLock`). Concurrent operations on the **same file** are automatically serialized, while operations on **different files** proceed in parallel.
+All operations are routed through a per-path lock (`PathLock`). Concurrent operations on the **same path** are automatically serialized, while operations on **different paths** proceed in parallel. Both file and directory operations are locked.
 
-- **Single-file operations** (`writeFile`, `readFile`, etc.) acquire the lock for their path.
-- **Multi-path operations** (`copyFile`, `moveFile`, `renameFile`) lock both paths in sorted order to prevent deadlocks.
+- **Single-path operations** (`writeFile`, `readFile`, `createDirectory`, etc.) acquire the lock for their path.
+- **Multi-path operations** (`copyFile`, `moveFile`, `renameFile`, `renameDirectory`) lock both paths in sorted order to prevent deadlocks.
 - **Bulk operations** (`writeFiles`, `readFiles`) run through the locked single-file methods with a configurable concurrency limit (`maxConcurrency`, default 10).
-- **Web worker pool** distributes unlocked work across N workers (default 4) for true parallel I/O via OPFS.
+- **Web worker pool** distributes work across N workers (default 4) for true parallel I/O via OPFS.
 
 ```
-Different files → parallel (worker pool + PathLock allows both through)
-Same file       → serialized (PathLock queues second operation until first completes)
-Bulk operations → bounded parallelism (ConcurrencyPool) + per-file serialization (PathLock)
+Different paths  -> parallel (worker pool + PathLock allows both through)
+Same path        -> serialized (PathLock queues second operation until first completes)
+Bulk operations  -> bounded parallelism (ConcurrencyPool) + per-path serialization (PathLock)
 ```
 
 ## Minimum Platform Versions
