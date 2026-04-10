@@ -126,7 +126,7 @@ final class DbasFileSystemPlatform {
 
   Future<bool> fileExists(String path) {
     DbasPathValidator.validate(path);
-    return _fileLock(path, () => _delegate.fileExists(path));
+    return _lock.shared(path, () => _delegate.fileExists(path));
   }
 
   Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) {
@@ -151,12 +151,12 @@ final class DbasFileSystemPlatform {
 
   Future<int> getFileSize(String path) {
     DbasPathValidator.validate(path);
-    return _fileLock(path, () => _delegate.getFileSize(path));
+    return _lock.shared(path, () => _delegate.getFileSize(path));
   }
 
   Future<DateTime> getLastModified(String path) {
     DbasPathValidator.validate(path);
-    return _fileLock(path, () => _delegate.getLastModified(path));
+    return _lock.shared(path, () => _delegate.getLastModified(path));
   }
 
   // ── Bulk operations ───────────────────────────────────────────────────

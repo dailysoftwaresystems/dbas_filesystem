@@ -27,7 +27,10 @@
       "Bash(xargs wc:*)",
       "Bash(cat .github/workflows/*.yml)",
       "Bash(chmod +x:*)",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(wc -l \"C:\\\\Source\\\\DailySoftware\\\\DBAS.FileSystem.Dart/lib\"/**/*.dart)",
+      "Bash(wc -l \"C:\\\\Source\\\\DailySoftware\\\\DBAS.FileSystem.Dart/test\"/**/*.dart)",
+      "Bash(grep -n \"final class\\\\|class\\\\|abstract\\\\|mixin\" \"C:\\\\Source\\\\DailySoftware\\\\DBAS.FileSystem.Dart/lib/src\"/**/*.dart)"
     ]
   }
 }

@@ -1,3 +1,9 @@
+## 3.1.1
+
+### Improvements
+
+* **Reduced lock contention for read-only operations**: `fileExists`, `getFileSize`, and `getLastModified` now acquire a shared lock instead of an exclusive lock. Multiple concurrent reads on the same path no longer serialize behind each other. This also reduces contention when `onFileChanged` is enabled, since every mutation performs an extra `fileExists` check before writing.
+
 ## 3.1.0
 
 ### Breaking changes

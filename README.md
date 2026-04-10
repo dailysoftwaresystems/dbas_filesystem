@@ -14,7 +14,7 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 - **Cross-device move** &mdash; automatic copy+delete fallback when source and destination are on different devices.
 - **File change notifications** &mdash; optional `onFileChanged` callback fires after every mutation with a map of affected entries and their before/after state.
 - **Progress callbacks** &mdash; optional `onProgress` on all operations, with per-entry and overall progress reporting.
-- **Hierarchical thread safety** &mdash; file operations acquire a shared lock on the parent directory + exclusive lock on the file. Directory-destructive operations acquire exclusive locks that block concurrent child file ops. Different paths proceed in parallel.
+- **Hierarchical thread safety** &mdash; mutating file operations acquire a shared lock on the parent directory + exclusive lock on the file. Read-only queries (`fileExists`, `getFileSize`, `getLastModified`) use shared locks for minimal contention. Directory-destructive operations acquire exclusive locks that block concurrent child file ops. Different paths proceed in parallel.
 - **Typed exceptions** &mdash; `FileNotFoundException`, `FileAlreadyExistsException`, `DirectoryNotFoundException`, `DirectoryNotEmptyException`, `PermissionDeniedException`, `MultiException`, `AtomicOperationException`.
 - **Web worker pool** &mdash; configurable pool of OPFS Web Workers for true parallel I/O on web, with automatic restart on crash (exponential backoff).
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
@@ -330,7 +330,8 @@ if (!fs.isPersistentStorage) {
 
 All operations are routed through a hierarchical per-path read-write lock (`PathLock`).
 
-- **File operations** acquire a **shared** lock on the parent directory and an **exclusive** lock on the file path. Two writes to different files in the same directory proceed in parallel. A directory delete blocks until child file operations complete.
+- **Mutating file operations** acquire a **shared** lock on the parent directory and an **exclusive** lock on the file path. Two writes to different files in the same directory proceed in parallel. A directory delete blocks until child file operations complete.
+- **Read-only file queries** (`fileExists`, `getFileSize`, `getLastModified`) acquire a **shared** lock on the file path only, allowing multiple concurrent reads without blocking each other or contending with sibling paths.
 - **Non-destructive directory operations** (`listDirectory`, `directoryExists`, `createDirectory`) acquire a **shared** lock on the directory path, allowing concurrent access.
 - **Destructive directory operations** (`deleteDirectory`, `renameDirectory`, `moveDirectory`) acquire an **exclusive** lock that blocks all concurrent file and directory operations within that path.
 - **Multi-path operations** (`copyFile`, `moveFile`, `renameFile`, `renameDirectory`, `copyDirectory`, `moveDirectory`) lock all involved paths in sorted order to prevent deadlocks. Exclusive overrides shared when the same path appears in both lock sets.
@@ -340,7 +341,8 @@ All operations are routed through a hierarchical per-path read-write lock (`Path
 
 ```
 Different paths       -> parallel (shared parent locks coexist)
-Same path             -> serialized (exclusive file lock queues)
+Same path (writes)    -> serialized (exclusive file lock queues)
+Same path (reads)     -> parallel (shared file lock allows concurrent queries)
 Dir delete + child op -> serialized (exclusive dir lock blocks shared parent)
 Bulk operations       -> bounded parallelism (ConcurrencyPool) + per-path locking
 ```
