@@ -31,15 +31,20 @@ jobs:
     - name: Run native tests
       run: flutter test test/dbas_filesystem_test.dart
     - name: Start ChromeDriver
-      run: chromedriver --port=4444 &
+      run: |
+        chromedriver --port=4444 &
+        echo "CHROMEDRIVER_PID=$!" >> $GITHUB_ENV
     - name: Run web integration tests
       working-directory: example
       timeout-minutes: 10
       run: |
-        flutter drive \
+        xvfb-run flutter drive \
           --driver=test_driver/integration_test.dart \
           --target=integration_test/dbas_filesystem_web_test.dart \
           -d chrome
+    - name: Stop ChromeDriver
+      if: always()
+      run: kill $CHROMEDRIVER_PID || true
     - name: Create Release
       if: github.event_name == 'push'
       env:

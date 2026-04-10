@@ -1,3 +1,11 @@
+## 2.2.1
+
+### Fixes
+
+* **CI: web integration tests on headless runners**: Fixed `Missing X server or $DISPLAY` error by wrapping `flutter drive` with `xvfb-run` for headless Chrome support on Ubuntu CI.
+* **CI: ChromeDriver cleanup**: Added a `Stop ChromeDriver` step (`if: always()`) to kill the backgrounded process after tests complete.
+* **CI: example dependencies**: Added `flutter pub get` for the `example/` project before running integration tests.
+
 ## 2.2.0
 
 ### New features
