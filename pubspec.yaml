@@ -6,7 +6,7 @@ author_name: Daily Software Systems
 author_email: dailysoftwaresystems@dailysoftwaresystems.com
 
 environment:
-  sdk: ^3.11.4
+  sdk: ^3.11.1
   flutter: '>=3.41.4'
 
 dependencies:
