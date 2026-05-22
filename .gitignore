@@ -121,9 +121,6 @@ unlinked_spec.ds
 **/linux/flutter/generated_plugin_registrant.h
 **/linux/flutter/generated_plugins.cmake
 
-# Built JS worker (minified output — source is in web/libs/src/)
-web/libs/dbas_filesystem_worker.js
-
 # Coverage
 coverage/
 
