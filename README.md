@@ -391,10 +391,10 @@ The OPFS Web Worker source is at `web/libs/src/dbas_filesystem_worker.js`. CI au
 
 ```bash
 # Linux / macOS / Git Bash
-bash scripts/minify-js-worker.sh
+bash scripts/build/minify-js-worker.sh
 
 # Windows PowerShell
-.\scripts\minify-js-worker.ps1
+.\scripts\build\minify-js-worker.ps1
 ```
 
 Both scripts install `esbuild` automatically if not found.
