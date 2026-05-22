@@ -1,3 +1,9 @@
+## 3.1.3
+
+### Documentation
+
+* **Install instructions for pub.dev**: README now installs `dbas_filesystem` from pub.dev (`flutter pub add dbas_filesystem`) instead of the previous git URL.
+
 ## 3.1.2
 
 ### Improvements

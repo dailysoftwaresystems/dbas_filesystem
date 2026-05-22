@@ -41,16 +41,19 @@ storage with byte-level random access and true background-thread I/O.
 Applications targeting older browsers should catch the `DbasFileSystemException`
 thrown by `getInstance()` and display an appropriate upgrade notice.
 
-## Getting Started
+## Installation
 
-Add the dependency to your `pubspec.yaml`:
+Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_filesystem:
-    git:
-      url: git@github.com:dailysoftwaresystems/dbas_filesystem.git
-      ref: main
+  dbas_filesystem: ^3.1.3
+```
+
+Or install with the Dart CLI:
+
+```bash
+flutter pub add dbas_filesystem
 ```
 
 ## Usage
