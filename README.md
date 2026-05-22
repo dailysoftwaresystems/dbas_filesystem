@@ -500,4 +500,4 @@ Workers automatically restart on crash with exponential backoff (first 3 retries
 
 ## License
 
-Copyright (c) 2025-2026 Daily Software Systems LTDA. All rights reserved. See [LICENSE](LICENSE) for details.
+Copyright 2025-2026 Daily Software Systems LTDA. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
