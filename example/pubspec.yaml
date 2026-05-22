@@ -1,6 +1,7 @@
 name: dbas_filesystem_example
 description: "Demonstrates how to use the dbas_filesystem plugin."
 publish_to: 'none'
+version: 1.0.0
 
 environment:
   sdk: ^3.12.0
