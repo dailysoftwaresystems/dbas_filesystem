@@ -1,6 +1,6 @@
 name: dbas_filesystem
 description: "Flutter plugin for cross-platform file system operations with streaming, byte array, and directory support across Android, iOS, macOS, Linux, Windows, and Web (OPFS)."
-version: 3.1.3
+version: 3.1.4
 homepage: https://github.com/dailysoftwaresystems/dbas_filesystem
 repository: https://github.com/dailysoftwaresystems/dbas_filesystem
 issue_tracker: https://github.com/dailysoftwaresystems/dbas_filesystem/issues
