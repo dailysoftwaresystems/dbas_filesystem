@@ -1,3 +1,13 @@
+## 3.1.4
+
+### Security
+
+* **Pinned third-party CI action**: `subosito/flutter-action` is now pinned to a commit SHA instead of the floating `v2` tag, so the public repo can't run an unverified upstream action update on PRs from forks. First-party `actions/*` stay on their major tags.
+
+### Documentation
+
+* **License footer aligned with Apache 2.0**: replaced the README "All rights reserved" line with "Licensed under the Apache License, Version 2.0" to match the actual `LICENSE` file.
+
 ## 3.1.3
 
 ### Documentation

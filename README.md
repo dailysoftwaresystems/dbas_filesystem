@@ -47,7 +47,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  dbas_filesystem: ^3.1.3
+  dbas_filesystem: ^3.1.4
 ```
 
 Or install with the Dart CLI:
