@@ -1,3 +1,11 @@
+## 3.1.2
+
+### Improvements
+
+* **Public release**: relicensed under Apache License 2.0 and prepared the repo for public distribution (new CI/release/publish pipeline, `.pubignore`, `CODEOWNERS`).
+* **SDK / Flutter floor**: bumped to `sdk: ^3.12.0` and `flutter: '>=3.44.0'`.
+* **Dependencies**: refreshed `web` to `^1.1.1`.
+
 ## 3.1.1
 
 ### Improvements
