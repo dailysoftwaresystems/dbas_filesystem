@@ -49,7 +49,7 @@ Add the dependency to your `pubspec.yaml`:
 dependencies:
   dbas_filesystem:
     git:
-      url: git@github.com:dailysoftwaresystems/DBAS.FileSystem.Dart.git
+      url: git@github.com:dailysoftwaresystems/dbas_filesystem.git
       ref: main
 ```
 

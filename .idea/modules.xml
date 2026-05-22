@@ -2,7 +2,7 @@
 <project version="4">
   <component name="ProjectModuleManager">
     <modules>
-      <module fileurl="file://$PROJECT_DIR$/.idea/DBAS.FileSystem.Dart.iml" filepath="$PROJECT_DIR$/.idea/DBAS.FileSystem.Dart.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/dbas_filesystem.iml" filepath="$PROJECT_DIR$/.idea/dbas_filesystem.iml" />
     </modules>
   </component>
 </project>
