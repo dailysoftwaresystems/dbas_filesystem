@@ -840,6 +840,27 @@ void main() {
     expect(File(absPath).existsSync(), isTrue);
   });
 
+  test('relative DIRECTORY and FILE ops root to the SAME place (no split)', () async {
+    // Regression: file ops were rooted while directory ops were not, so
+    // a file written under a relative dir was invisible to a directory
+    // op on that same relative path — `copyDirectory` saw no conflict.
+    await fs.createDirectory('root_split/src');
+    await fs.createDirectory('root_split/dst');
+    await fs.writeFile('root_split/src/file.bin', Uint8List.fromList([1]));
+    await fs.writeFile('root_split/dst/file.bin', Uint8List.fromList([2]));
+
+    // The directory listing (rooted) sees the file the rooted write put
+    // there, and the conflicting copy is detected.
+    final listed = await fs.listDirectory('root_split/src');
+    expect(listed.map((e) => e.path.split('/').last), contains('file.bin'));
+    await expectLater(
+      () => fs.copyDirectory('root_split/src', 'root_split/dst', overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+
+    await fs.deleteDirectory('root_split', recursive: true);
+  });
+
   // ── Path validation ───────────────────────────────────────────────────
 
   test('empty path throws ArgumentError', () {
