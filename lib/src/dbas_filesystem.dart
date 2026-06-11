@@ -6,6 +6,7 @@ import 'package:dbas_filesystem/src/dbas_filesystem_platform.dart';
 import 'package:dbas_filesystem/src/dbas_filesystem_progress.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_cancellation_token.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_platform_util.dart';
+import 'package:dbas_filesystem/src/helpers/dbas_path_validator.dart';
 import 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_io.dart'
   if (dart.library.js_interop) 'package:dbas_filesystem/src/helpers/dbas_filesystem_path_helper_web.dart';
 import 'package:flutter/foundation.dart';
@@ -164,6 +165,40 @@ class DbasFileSystem {
     return getAppFilePathImpl(fileName, DbasFileSystemPlatformUtil.isTest());
   }
 
+  /// Cached app-storage root (one platform-channel lookup per instance).
+  String? _appDirCache;
+
+  Future<String> _appDir() async {
+    return _appDirCache ??= await getAppDirImpl(DbasFileSystemPlatformUtil.isTest());
+  }
+
+  /// Resolves a path to its on-disk location. A RELATIVE path (the
+  /// bucket convention — `uploads/x`, `downloads/x`) is rooted under the
+  /// app's storage directory so it never resolves against the process
+  /// CWD; an ALREADY-ABSOLUTE path (a caller-supplied temp path, or a
+  /// path previously returned by [getAppFilePath]) passes through
+  /// unchanged. This is the single choke point that makes every file
+  /// operation land in the app's own storage area.
+  Future<String> _resolve(String filePath) async {
+    // Validate the ORIGINAL input here — rooting an empty/blank path
+    // would otherwise produce a non-empty `<appdir>/` that slips past
+    // the platform's validation. (The platform re-validates the resolved
+    // path; this guards the pre-resolution form.)
+    DbasPathValidator.validate(filePath);
+    if (_isRooted(filePath)) return filePath;
+    return '${await _appDir()}/$filePath';
+  }
+
+  /// POSIX/OPFS absolute (`/...`), Windows drive (`C:...`), or UNC
+  /// (`\\...`). Forward- and back-slash forms both count.
+  static bool _isRooted(String filePath) {
+    if (filePath.isEmpty) return false;
+    if (filePath.startsWith('/')) return true;
+    if (filePath.startsWith(r'\\')) return true;
+    if (filePath.length >= 2 && filePath[1] == ':') return true;
+    return false;
+  }
+
   // ── Notification helpers ──────────────────────────────────────────────
 
   /// Fires the change notification callback. Swallows callback exceptions
@@ -210,6 +245,7 @@ class DbasFileSystem {
   /// [FileAlreadyExistsException]. Pass `overwrite: true` to replace.
   Future<void> writeFile(String filePath, Uint8List bytes, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final existed = onFileChanged != null ? await _platform.fileExists(filePath) : null;
     await _platform.writeFile(filePath, bytes, overwrite: overwrite);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
@@ -226,6 +262,7 @@ class DbasFileSystem {
   /// [FileAlreadyExistsException]. Pass `overwrite: true` to replace.
   Future<void> writeFileStream(String filePath, Stream<List<int>> stream, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final existed = onFileChanged != null ? await _platform.fileExists(filePath) : null;
     await _platform.writeFileStream(filePath, stream, overwrite: overwrite);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
@@ -239,6 +276,7 @@ class DbasFileSystem {
   /// parent directories if they do not exist.
   Future<void> appendFile(String filePath, Uint8List bytes, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final existed = onFileChanged != null ? await _platform.fileExists(filePath) : null;
     await _platform.appendFile(filePath, bytes);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
@@ -252,6 +290,7 @@ class DbasFileSystem {
   /// file and any parent directories if they do not exist.
   Future<void> appendFileStream(String filePath, Stream<List<int>> stream, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final existed = onFileChanged != null ? await _platform.fileExists(filePath) : null;
     await _platform.appendFileStream(filePath, stream);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
@@ -266,6 +305,7 @@ class DbasFileSystem {
   /// Throws [FileNotFoundException] if the file does not exist.
   Future<Uint8List> readFile(String filePath, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final result = await _platform.readFile(filePath);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
     return result;
@@ -282,12 +322,16 @@ class DbasFileSystem {
   /// until the stream completes or is cancelled.
   Stream<Uint8List> readFileStream(String filePath, {int chunkSize = 65536}) {
     _assertNotDisposed();
-    return _platform.readFileStream(filePath, chunkSize: chunkSize);
+    // Resolve lazily, then delegate — keeps the read streaming (no eager
+    // open) while still rooting a relative bucket path.
+    return Stream.fromFuture(_resolve(filePath))
+        .asyncExpand((resolved) => _platform.readFileStream(resolved, chunkSize: chunkSize));
   }
 
   /// Deletes the file at [filePath]. No-op if the file does not exist.
   Future<void> deleteFile(String filePath, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    filePath = await _resolve(filePath);
     final existed = onFileChanged != null ? await _platform.fileExists(filePath) : null;
     await _platform.deleteFile(filePath);
     _reportDone(filePath, FileSystemEntityType.file, onProgress);
@@ -297,9 +341,9 @@ class DbasFileSystem {
   }
 
   /// Returns `true` if a file exists at [filePath].
-  Future<bool> fileExists(String filePath) {
+  Future<bool> fileExists(String filePath) async {
     _assertNotDisposed();
-    return _platform.fileExists(filePath);
+    return _platform.fileExists(await _resolve(filePath));
   }
 
   /// Copies the file at [sourcePath] to [destPath], creating parent
@@ -310,6 +354,8 @@ class DbasFileSystem {
   /// Throws [FileNotFoundException] if the source file does not exist.
   Future<void> copyFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    sourcePath = await _resolve(sourcePath);
+    destPath = await _resolve(destPath);
     final destExisted = onFileChanged != null ? await _platform.fileExists(destPath) : null;
     await _platform.copyFile(sourcePath, destPath, overwrite: overwrite, onProgress: onProgress);
     if (onProgress != null) _reportDone(destPath, FileSystemEntityType.file, onProgress);
@@ -328,6 +374,8 @@ class DbasFileSystem {
   /// Throws [FileNotFoundException] if the source file does not exist.
   Future<void> moveFile(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    sourcePath = await _resolve(sourcePath);
+    destPath = await _resolve(destPath);
     final destExisted = onFileChanged != null ? await _platform.fileExists(destPath) : null;
     await _platform.moveFile(sourcePath, destPath, overwrite: overwrite, onProgress: onProgress);
     if (onProgress != null) _reportDone(destPath, FileSystemEntityType.file, onProgress);
@@ -349,6 +397,8 @@ class DbasFileSystem {
   /// Throws [FileNotFoundException] if the source file does not exist.
   Future<void> renameFile(String oldPath, String newPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    oldPath = await _resolve(oldPath);
+    newPath = await _resolve(newPath);
     final destExisted = onFileChanged != null ? await _platform.fileExists(newPath) : null;
     await _platform.renameFile(oldPath, newPath, overwrite: overwrite);
     _reportDone(newPath, FileSystemEntityType.file, onProgress);
@@ -367,17 +417,26 @@ class DbasFileSystem {
   /// Returns the size of the file at [filePath] in bytes.
   ///
   /// Throws [FileNotFoundException] if the file does not exist.
-  Future<int> getFileSize(String filePath) {
+  Future<int> getFileSize(String filePath) async {
     _assertNotDisposed();
-    return _platform.getFileSize(filePath);
+    return _platform.getFileSize(await _resolve(filePath));
   }
 
   /// Returns the last-modified timestamp (UTC) of the file at [filePath].
   ///
   /// Throws [FileNotFoundException] if the file does not exist.
-  Future<DateTime> getLastModified(String filePath) {
+  Future<DateTime> getLastModified(String filePath) async {
     _assertNotDisposed();
-    return _platform.getLastModified(filePath);
+    return _platform.getLastModified(await _resolve(filePath));
+  }
+
+  /// Roots every key of a bulk-write map (the values are untouched).
+  Future<Map<String, V>> _resolveKeys<V>(Map<String, V> files) async {
+    final resolved = <String, V>{};
+    for (final entry in files.entries) {
+      resolved[await _resolve(entry.key)] = entry.value;
+    }
+    return resolved;
   }
 
   // ── Bulk operations ───────────────────────────────────────────────────
@@ -418,6 +477,7 @@ class DbasFileSystem {
     void Function(String path, Object error)? onError,
   }) async {
     _assertNotDisposed();
+    files = await _resolveKeys(files);
     final existedMap = await _platform.writeFiles(files,
         maxConcurrency: maxConcurrency, cancellationToken: cancellationToken,
         onProgress: onProgress, atomic: atomic, onError: onError);
@@ -448,6 +508,7 @@ class DbasFileSystem {
     void Function(String path, Object error)? onError,
   }) async {
     _assertNotDisposed();
+    files = await _resolveKeys(files);
     final existedMap = await _platform.writeFilesStream(files,
         maxConcurrency: maxConcurrency, cancellationToken: cancellationToken,
         onProgress: onProgress, atomic: atomic, onError: onError);
@@ -486,11 +547,28 @@ class DbasFileSystem {
     CancellationToken? cancellationToken,
     ProgressCallback? onProgress,
     void Function(String path, Object error)? onError,
-  }) {
+  }) async {
     _assertNotDisposed();
-    return _platform.readFiles(paths,
+    // Resolve for the platform but key the RESULT (and any onError
+    // callback) by the ORIGINAL caller path, so `result[callerPath]`
+    // keeps working when the caller passed a relative bucket path.
+    final originalByResolved = <String, String>{};
+    final resolvedPaths = <String>[];
+    for (final original in paths) {
+      final resolved = await _resolve(original);
+      originalByResolved[resolved] = original;
+      resolvedPaths.add(resolved);
+    }
+    final result = await _platform.readFiles(resolvedPaths,
         maxConcurrency: maxConcurrency, cancellationToken: cancellationToken,
-        onProgress: onProgress, onError: onError);
+        onProgress: onProgress,
+        onError: onError == null
+            ? null
+            : (path, error) => onError(originalByResolved[path] ?? path, error));
+    return {
+      for (final entry in result.entries)
+        (originalByResolved[entry.key] ?? entry.key): entry.value,
+    };
   }
 
   // ── Directory operations ──────────────────────────────────────────────
@@ -502,6 +580,7 @@ class DbasFileSystem {
   /// the parent does not exist.
   Future<void> createDirectory(String dirPath, {bool recursive = true, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    dirPath = await _resolve(dirPath);
     final existed = onFileChanged != null ? await _platform.directoryExists(dirPath) : null;
     await _platform.createDirectory(dirPath, recursive: recursive);
     _reportDone(dirPath, FileSystemEntityType.directory, onProgress);
@@ -511,9 +590,9 @@ class DbasFileSystem {
   }
 
   /// Returns `true` if a directory exists at [dirPath].
-  Future<bool> directoryExists(String dirPath) {
+  Future<bool> directoryExists(String dirPath) async {
     _assertNotDisposed();
-    return _platform.directoryExists(dirPath);
+    return _platform.directoryExists(await _resolve(dirPath));
   }
 
   /// Lists the entries in the directory at [dirPath].
@@ -522,9 +601,9 @@ class DbasFileSystem {
   /// Each entry includes a normalized forward-slash path and its type
   /// ([FileSystemEntityType.file] or [FileSystemEntityType.directory]).
   /// Throws [DirectoryNotFoundException] if the directory does not exist.
-  Future<List<FileSystemEntry>> listDirectory(String dirPath, {bool recursive = false}) {
+  Future<List<FileSystemEntry>> listDirectory(String dirPath, {bool recursive = false}) async {
     _assertNotDisposed();
-    return _platform.listDirectory(dirPath, recursive: recursive);
+    return _platform.listDirectory(await _resolve(dirPath), recursive: recursive);
   }
 
   /// Deletes the directory at [dirPath]. No-op if it does not exist.
@@ -533,6 +612,7 @@ class DbasFileSystem {
   /// throws [DirectoryNotEmptyException].
   Future<void> deleteDirectory(String dirPath, {bool recursive = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    dirPath = await _resolve(dirPath);
     List<FileSystemEntry>? entries;
     if (onFileChanged != null && await _platform.directoryExists(dirPath)) {
       try {
@@ -558,6 +638,8 @@ class DbasFileSystem {
   /// Throws [DirectoryNotFoundException] if the source does not exist.
   Future<void> renameDirectory(String oldPath, String newPath, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    oldPath = await _resolve(oldPath);
+    newPath = await _resolve(newPath);
     List<FileSystemEntry>? oldEntries;
     if (onFileChanged != null && await _platform.directoryExists(oldPath)) {
       try {
@@ -596,6 +678,8 @@ class DbasFileSystem {
   /// Throws [DirectoryNotFoundException] if [sourcePath] does not exist.
   Future<void> copyDirectory(String sourcePath, String destPath, {bool overwrite = false, ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    sourcePath = await _resolve(sourcePath);
+    destPath = await _resolve(destPath);
     await _platform.copyDirectory(sourcePath, destPath, overwrite: overwrite, onProgress: onProgress);
     if (onProgress != null) _reportDone(destPath, FileSystemEntityType.directory, onProgress);
     if (onFileChanged != null) {
@@ -621,6 +705,8 @@ class DbasFileSystem {
   /// Throws [DirectoryNotFoundException] if [sourcePath] does not exist.
   Future<void> moveDirectory(String sourcePath, String destPath, {ProgressCallback? onProgress}) async {
     _assertNotDisposed();
+    sourcePath = await _resolve(sourcePath);
+    destPath = await _resolve(destPath);
     List<FileSystemEntry>? srcEntries;
     if (onFileChanged != null) {
       try {

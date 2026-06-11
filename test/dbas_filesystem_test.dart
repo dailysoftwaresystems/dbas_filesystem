@@ -809,6 +809,58 @@ void main() {
     expect(filePath, endsWith('test_file.bin'));
   });
 
+  // ── Relative-path rooting (auto-resolve under the app directory) ──────
+
+  test('a RELATIVE path is rooted under the app directory, not the CWD', () async {
+    // Writing a bare relative path must land under the app's storage
+    // root (here, test/files) — never the process working directory.
+    final bytes = Uint8List.fromList([7, 8, 9]);
+    await fs.writeFile('rooted_bucket/relative_file.bin', bytes, overwrite: true);
+
+    // The file does NOT exist at the CWD-relative location...
+    expect(File('rooted_bucket/relative_file.bin').existsSync(), isFalse);
+    // ...but DOES exist under the rooted app path, reachable by the same
+    // relative handle (read roots it the same way).
+    expect(await fs.fileExists('rooted_bucket/relative_file.bin'), isTrue);
+    expect(await fs.readFile('rooted_bucket/relative_file.bin'), equals(bytes));
+    final rooted = await fs.getAppFilePath('rooted_bucket/relative_file.bin');
+    expect(File(rooted).existsSync(), isTrue);
+
+    await fs.deleteFile('rooted_bucket/relative_file.bin');
+  });
+
+  test('an ABSOLUTE path passes through unchanged (no double-rooting)', () async {
+    final absPath = '$testDir/absolute_passthrough.bin';
+    final bytes = Uint8List.fromList([1, 1, 2, 3, 5]);
+    await fs.writeFile(absPath, bytes, overwrite: true);
+
+    // Read back via the same absolute path — it was not re-rooted under
+    // a second `dbas_files`/`test/files` segment.
+    expect(await fs.readFile(absPath), equals(bytes));
+    expect(File(absPath).existsSync(), isTrue);
+  });
+
+  test('relative DIRECTORY and FILE ops root to the SAME place (no split)', () async {
+    // Regression: file ops were rooted while directory ops were not, so
+    // a file written under a relative dir was invisible to a directory
+    // op on that same relative path — `copyDirectory` saw no conflict.
+    await fs.createDirectory('root_split/src');
+    await fs.createDirectory('root_split/dst');
+    await fs.writeFile('root_split/src/file.bin', Uint8List.fromList([1]));
+    await fs.writeFile('root_split/dst/file.bin', Uint8List.fromList([2]));
+
+    // The directory listing (rooted) sees the file the rooted write put
+    // there, and the conflicting copy is detected.
+    final listed = await fs.listDirectory('root_split/src');
+    expect(listed.map((e) => e.path.split('/').last), contains('file.bin'));
+    await expectLater(
+      () => fs.copyDirectory('root_split/src', 'root_split/dst', overwrite: false),
+      throwsA(isA<FileAlreadyExistsException>()),
+    );
+
+    await fs.deleteDirectory('root_split', recursive: true);
+  });
+
   // ── Path validation ───────────────────────────────────────────────────
 
   test('empty path throws ArgumentError', () {

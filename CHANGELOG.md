@@ -1,3 +1,14 @@
+## 3.2.0
+
+### Improvements
+
+* **Relative paths resolve under the app directory**: every file operation (`writeFile`, `writeFileStream`, `readFile`, `readFileStream`, `appendFile*`, `deleteFile`, `fileExists`, `getFileSize`, `getLastModified`, `copyFile`, `moveFile`, `renameFile`, `writeFiles`, `writeFilesStream`) now roots a RELATIVE path under the application storage directory — `<application-support>/dbas_files/` on native, `/dbas_files/` on web (OPFS), `<cwd>/test/files/` under test — the same location [getAppFilePath](README.md) already returned. Previously a relative path resolved against the process working directory on native, which is unpredictable in a packaged app. This makes a bucket-style path like `uploads/photo.jpg` land in the app's own storage area without each caller having to pre-resolve it through `getAppFilePath`.
+* **Absolute paths are unchanged**: an already-absolute path (POSIX/OPFS `/…`, a Windows drive `C:…`, or a UNC `\\…` path — including any path previously returned by `getAppFilePath`) passes through untouched, so existing callers that resolve paths up front keep working with zero double-rooting. The app-directory root is resolved once and cached per instance.
+
+### Behavioural note
+
+* This changes where a **relative** path physically lands on native (app-support directory instead of the CWD). Callers that already passed absolute paths (the documented pattern via `getAppFilePath`) are unaffected. Empty / blank / null-byte paths still throw `ArgumentError` as before.
+
 ## 3.1.4
 
 ### Security
