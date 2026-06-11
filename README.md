@@ -20,6 +20,7 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
 - **Side-effect free path resolution** &mdash; `getAppFilePath` resolves a platform path without creating directories or accessing the file system.
+- **App-directory rooting** &mdash; a **relative** path passed to any file operation is automatically rooted under the application storage directory (`<application-support>/dbas_files/` on native, `/dbas_files/` on web, `<cwd>/test/files/` under test), so it never resolves against the process working directory. An **absolute** path passes through unchanged. See [Path rooting](#path-rooting).
 - **Lifecycle management** &mdash; `dispose({timeout})` gives in-flight operations a configurable grace period, then forces teardown. `isDisposed` reflects whether an instance has been disposed.
 - **Cancellation** &mdash; `CancellationToken` with `addListener` / `removeListener` for reactive cancellation in long-running operations.
 
@@ -84,6 +85,35 @@ print(utf8.decode(bytes));
 > **Note**: `getAppFilePath` only resolves a path — it does not create
 > directories. Parent directories are created automatically when you call
 > `writeFile`, `writeFileStream`, or `appendFile`.
+
+### Path rooting
+
+Every file operation roots a **relative** path under the application
+storage directory, so you can pass a bucket-style path directly without
+pre-resolving it through `getAppFilePath`:
+
+```dart
+// Relative — rooted under the app directory automatically.
+await fs.writeFileStream('uploads/photo.jpg', byteStream);
+final bytes = await fs.readFile('uploads/photo.jpg'); // same physical file
+
+// Equivalent, resolving the path explicitly first.
+final path = await fs.getAppFilePath('uploads/photo.jpg');
+await fs.writeFileStream(path, byteStream);
+```
+
+The storage root is:
+
+| Context | Root |
+| --- | --- |
+| Native (Android, iOS, macOS, Linux, Windows) | `<application-support>/dbas_files/` |
+| Web | `/dbas_files/` (OPFS) |
+| Test (`FLUTTER_TEST`) | `<cwd>/test/files/` |
+
+An **absolute** path (POSIX/OPFS `/…`, a Windows drive `C:…`, or a UNC
+`\\…` path — including any path returned by `getAppFilePath`) passes
+through unchanged, so callers that resolve up front are unaffected and
+nothing is double-rooted.
 
 ### Append to a file
 

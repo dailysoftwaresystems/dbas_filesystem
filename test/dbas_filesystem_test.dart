@@ -809,6 +809,37 @@ void main() {
     expect(filePath, endsWith('test_file.bin'));
   });
 
+  // ── Relative-path rooting (auto-resolve under the app directory) ──────
+
+  test('a RELATIVE path is rooted under the app directory, not the CWD', () async {
+    // Writing a bare relative path must land under the app's storage
+    // root (here, test/files) — never the process working directory.
+    final bytes = Uint8List.fromList([7, 8, 9]);
+    await fs.writeFile('rooted_bucket/relative_file.bin', bytes, overwrite: true);
+
+    // The file does NOT exist at the CWD-relative location...
+    expect(File('rooted_bucket/relative_file.bin').existsSync(), isFalse);
+    // ...but DOES exist under the rooted app path, reachable by the same
+    // relative handle (read roots it the same way).
+    expect(await fs.fileExists('rooted_bucket/relative_file.bin'), isTrue);
+    expect(await fs.readFile('rooted_bucket/relative_file.bin'), equals(bytes));
+    final rooted = await fs.getAppFilePath('rooted_bucket/relative_file.bin');
+    expect(File(rooted).existsSync(), isTrue);
+
+    await fs.deleteFile('rooted_bucket/relative_file.bin');
+  });
+
+  test('an ABSOLUTE path passes through unchanged (no double-rooting)', () async {
+    final absPath = '$testDir/absolute_passthrough.bin';
+    final bytes = Uint8List.fromList([1, 1, 2, 3, 5]);
+    await fs.writeFile(absPath, bytes, overwrite: true);
+
+    // Read back via the same absolute path — it was not re-rooted under
+    // a second `dbas_files`/`test/files` segment.
+    expect(await fs.readFile(absPath), equals(bytes));
+    expect(File(absPath).existsSync(), isTrue);
+  });
+
   // ── Path validation ───────────────────────────────────────────────────
 
   test('empty path throws ArgumentError', () {
