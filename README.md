@@ -20,7 +20,7 @@ A Flutter plugin for cross-platform file system operations with streaming, byte 
 - **Configurable chunking** &mdash; streamed reads use a configurable chunk size (default 64 KB).
 - **Path normalization** &mdash; `listDirectory` and `getAppFilePath` return forward-slash paths on all platforms.
 - **Side-effect free path resolution** &mdash; `getAppFilePath` resolves a platform path without creating directories or accessing the file system.
-- **App-directory rooting** &mdash; a **relative** path passed to any file operation is automatically rooted under the application storage directory (`<application-support>/dbas_files/` on native, `/dbas_files/` on web, `<cwd>/test/files/` under test), so it never resolves against the process working directory. An **absolute** path passes through unchanged. See [Path rooting](#path-rooting).
+- **App-directory rooting** &mdash; a **relative** path passed to any file operation is automatically rooted under the application storage directory (`<application-support>/dbas_files/` on native, `/dbas_files/` on web, a per-process directory under `<cwd>/test/files/` under test), so it never resolves against the process working directory. An **absolute** path passes through unchanged. `getAppDirectory()` returns that root. See [Path rooting](#path-rooting).
 - **Lifecycle management** &mdash; `dispose({timeout})` gives in-flight operations a configurable grace period, then forces teardown. `isDisposed` reflects whether an instance has been disposed.
 - **Cancellation** &mdash; `CancellationToken` with `addListener` / `removeListener` for reactive cancellation in long-running operations.
 
@@ -108,12 +108,43 @@ The storage root is:
 | --- | --- |
 | Native (Android, iOS, macOS, Linux, Windows) | `<application-support>/dbas_files/` |
 | Web | `/dbas_files/` (OPFS) |
-| Test (`FLUTTER_TEST`) | `<cwd>/test/files/` |
+| Test (`FLUTTER_TEST`) | `<cwd>/test/files/<pid>-<entropy>/` |
+
+`getAppDirectory()` returns this root.
 
 An **absolute** path (POSIX/OPFS `/…`, a Windows drive `C:…`, or a UNC
 `\\…` path — including any path returned by `getAppFilePath`) passes
 through unchanged, so callers that resolve up front are unaffected and
 nothing is double-rooted.
+
+### The test root is per process
+
+Under `FLUTTER_TEST` the root carries a component unique to the running
+process. `flutter test` executes test files in separate, concurrently
+running OS processes; a single shared root means one suite's recursive
+cleanup deletes the bytes another suite just staged, and one suite's
+leftovers show up in another's `listDirectory`.
+
+Clean up by deleting **your own** root, never its parent:
+
+```dart
+late String testDir;
+
+setUpAll(() async {
+  final fs = await DbasFileSystem.getInstance();
+  testDir = await fs.getAppDirectory(); // this process's root
+  Directory(testDir).createSync(recursive: true);
+});
+
+tearDownAll(() {
+  final dir = Directory(testDir);
+  if (dir.existsSync()) dir.deleteSync(recursive: true);
+});
+```
+
+Every root is a direct child of `<cwd>/test/files/`, so deleting that
+parent **between** runs still collects anything a crashed run abandoned.
+The library does not sweep other runs' roots itself.
 
 ### Append to a file
 
@@ -335,6 +366,7 @@ if (!fs.isPersistentStorage) {
 | `isPersistentStorage` | Whether storage is persistent (always `true` on native; reflects browser grant on web). |
 | `onFileChanged` | Getter/setter for the file change notification callback. |
 | `getAppFilePath(fileName)` | Resolves a platform-specific path (forward-slash normalized). Does not create directories. |
+| `getAppDirectory()` | Returns the directory a relative path resolves under. Does not create it. Per-process under `FLUTTER_TEST`. |
 | `writeFile(path, bytes, {overwrite, onProgress})` | Writes a `Uint8List` to a file. |
 | `writeFileStream(path, stream, {overwrite, onProgress})` | Writes a stream of byte chunks to a file. |
 | `appendFile(path, bytes, {onProgress})` | Appends bytes to a file (creates it if missing). |

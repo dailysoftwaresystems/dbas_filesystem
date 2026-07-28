@@ -11,14 +11,17 @@ void main() {
   late String testDir;
 
   setUpAll(() async {
-    testDir = '${Directory.current.path}/test/files';
+    fs = await DbasFileSystem.getInstance();
+
+    // THIS process's staging root, not the shared `test/files` parent.
+    // `flutter test` runs test files in concurrent processes; wiping the
+    // parent would delete the bytes another suite is staging right now.
+    testDir = await fs.getAppDirectory();
     final dir = Directory(testDir);
     if (dir.existsSync()) {
       dir.deleteSync(recursive: true);
     }
     dir.createSync(recursive: true);
-
-    fs = await DbasFileSystem.getInstance();
   });
 
   tearDownAll(() {

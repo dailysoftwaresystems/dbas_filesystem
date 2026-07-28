@@ -165,6 +165,29 @@ class DbasFileSystem {
     return getAppFilePathImpl(fileName, DbasFileSystemPlatformUtil.isTest());
   }
 
+  /// Returns the directory a RELATIVE path resolves under — the root that
+  /// backs [getAppFilePath] and every relative-path file operation.
+  ///
+  /// `<application-support>/dbas_files` on native, `/dbas_files` on web
+  /// (OPFS). Under `FLUTTER_TEST` it is a directory unique to the current
+  /// process, because `flutter test` runs test files in concurrent
+  /// processes and they would otherwise share one directory and delete
+  /// each other's staged files.
+  ///
+  /// **This method only resolves a path — it does not create the
+  /// directory.** Write operations create it on demand.
+  ///
+  /// Use it to clean up after a test run: delete THIS directory rather
+  /// than its parent, so a concurrently running suite's files survive.
+  /// The library deliberately does not sweep roots left behind by other
+  /// runs — with cleanup working, only a crashed run leaks one directory,
+  /// and every root is confined to a single parent so a sweep can still be
+  /// added later without a breaking change.
+  Future<String> getAppDirectory() {
+    _assertNotDisposed();
+    return _appDir();
+  }
+
   /// Cached app-storage root (one platform-channel lookup per instance).
   String? _appDirCache;
 

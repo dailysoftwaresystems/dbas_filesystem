@@ -1,3 +1,18 @@
+## 3.3.0
+
+### New features
+
+* **`getAppDirectory()`**: New method on `DbasFileSystem` returning the directory a RELATIVE path resolves under — the root behind `getAppFilePath` and every relative-path file operation. Resolve-only (it does not create the directory) and, like `getAppFilePath`, throws `StateError` after `dispose`. It exists because the storage root is no longer a fixed string under test (see below), so a suite can no longer name its own root: `getAppFilePath` demands a file name.
+
+### Fixes
+
+* **Concurrent test suites no longer share one staging root**: under `FLUTTER_TEST` the storage root was hard-coded to `<cwd>/test/files` with no per-process component. `flutter test` runs test files in **separate, concurrently executing OS processes**, and every one of them resolved that same directory — so one suite's recursive cleanup deleted the bytes another suite had staged, and one suite's leftovers appeared in another suite's `listDirectory` results and made `fileExists` true for paths it never wrote. The root is now `<cwd>/test/files/<pid>-<entropy>`: the pid guarantees distinctness between processes that are alive at the same time (entropy alone would only make it probable), and the entropy stops a later run from adopting the root a crashed run abandoned, since process ids are recycled. The component is drawn once per process and cached at library scope, so the root does not move when a suite disposes and re-creates the singleton.
+
+### Behavioural note
+
+* **Test-mode rooting changed**: under `FLUTTER_TEST` the root is now a per-process directory **inside** `<cwd>/test/files/`, not `<cwd>/test/files/` itself. Suites that resolve paths through `getAppFilePath` (or pass relative paths and let them be rooted) are unaffected. A suite that hard-codes `<cwd>/test/files` — in particular to wipe it in `setUpAll`/`tearDownAll` — should switch to `await fs.getAppDirectory()` and delete **its own** root; wiping the shared parent is the very race this release fixes. Production and web (OPFS) rooting are byte-identical to 3.2.0.
+* **Cleanup is the consumer's**: the library does not sweep staging roots left behind by other runs, and adds no API to do so. With per-suite cleanup working, a normal run leaks nothing and only a crashed run abandons a directory. Every root is a direct child of `<cwd>/test/files/`, so deleting that parent between runs still collects everything — and a sweep can be added later without a breaking change.
+
 ## 3.2.0
 
 ### Improvements
